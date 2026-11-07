@@ -81,6 +81,24 @@ pip install -r requirements.txt -r requirements-dev.txt
 pytest
 ```
 
+## Prompt injection hardening
+
+The audio transcript and WhatsApp speaker name are **untrusted input**. The summarizer
+sends them as JSON data, separately from its system instructions, and explicitly asks
+the model not to follow commands embedded in the audio (including fake role markers,
+requests for secrets, and instructions to send data elsewhere).
+
+This is defense in depth, **not a guarantee** that an LLM will never produce a
+manipulated summary. The model is not given execution tools, credentials, filesystem
+access, or a free-form HTTP client. Keep it that way; never treat transcript content
+as permission to run actions. `clean_summary` still enforces the output length/line
+limits, but does not semantically verify factual accuracy or adversarial compliance.
+
+Run the boundary regression tests with `python -m pytest tests/test_prompt_injection.py`.
+They inspect API request structure using mocked responses; they are **not** proof of
+resistance against every prompt injection. Real-model adversarial evaluations are
+recommended before sensitive deployments.
+
 ## Attribution
 
 Every reply ends with:
