@@ -58,7 +58,7 @@ tail -f logs/laschuk-resume.log
 curl -s localhost:8787/health
 ```
 
-Register the Evolution webhook at `POST $EVOLUTION_URL/webhook/set/$EVOLUTION_INSTANCE` pointing to `http://<bot-host>:8787/webhook` with `MESSAGES_UPSERT` and preferably `base64: true`. Full `curl` example is in `.env.example` comments / historical hillside docs pattern:
+Register the Evolution webhook at `POST $EVOLUTION_URL/webhook/set/$EVOLUTION_INSTANCE` pointing to `http://<bot-host>:8787/webhook` with `MESSAGES_UPSERT` and preferably `base64: true`. Example:
 
 ```bash
 set -a; source .env; set +a
@@ -77,13 +77,17 @@ curl -X POST "$EVOLUTION_URL/webhook/set/$EVOLUTION_INSTANCE" \
   }"
 ```
 
-## oc76
+## Running next to the Evolution API
+
+If Evolution runs in its own Docker Compose project, the bot can join its network so Evolution reaches the webhook at `http://laschuk-resume:8787/webhook`. Copy the example override and set your Evolution network name (`docker network ls`):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.oc76.yml up -d --build
+cp docker-compose.override.example.yml docker-compose.override.yml
+$EDITOR docker-compose.override.yml   # networks.evolution.name = your Evolution network
+docker compose up -d --build          # the override file is picked up automatically
 ```
 
-Joins the external `evolution-leonora_default` network and binds the port on loopback only.
+The override also binds the host port on loopback only. `docker-compose.override.yml` and `docker-compose.*.local.yml` are git-ignored, so each deployment keeps its real file out of the repository.
 
 ## Tests
 

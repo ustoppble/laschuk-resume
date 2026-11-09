@@ -32,7 +32,7 @@ def test_evolution_endpoints_and_headers():
     def handler(req: httpx.Request):
         seen.append(req)
         if req.url.path == "/group/fetchAllGroups/inst":
-            return httpx.Response(200, json=[{"id": "1@g.us", "subject": "Hillside"}])
+            return httpx.Response(200, json=[{"id": "1@g.us", "subject": "Meu Grupo"}])
         if req.url.path == "/chat/getBase64FromMediaMessage/inst":
             return httpx.Response(200, json={"base64": "QQ==", "mimetype": "audio/ogg"})
         if req.url.path == "/message/sendText/inst":
@@ -48,7 +48,7 @@ def test_evolution_endpoints_and_headers():
             return groups, media
 
     groups, media = run(go())
-    assert groups[0]["subject"] == "Hillside"
+    assert groups[0]["subject"] == "Meu Grupo"
     assert media == ("QQ==", "audio/ogg")
     assert all(r.headers["apikey"] == "KEY" for r in seen)
     assert seen[0].url.params["getParticipants"] == "false"

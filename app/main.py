@@ -71,6 +71,8 @@ class Bot:
         self.summarizer = summarizer
         self.seen = seen
         self.group_jid = settings.group_jid
+        if not settings.group_jid and not settings.group_name:
+            log.warning("no GROUP_NAME or GROUP_JID set: group audios are ignored (DMs still follow DM_TRANSCRIBE)")
         self._group_lock = asyncio.Lock()
         self._last_group_attempt = 0.0
         self.owner_jid = settings.owner_jid
@@ -81,7 +83,7 @@ class Bot:
 
     async def ensure_group(self) -> str:
         """Resolve the group JID by name once; retry at most every GROUP_RETRY_SECONDS on failure."""
-        if self.group_jid:
+        if self.group_jid or not self.s.group_name:
             return self.group_jid
         async with self._group_lock:
             if self.group_jid or time.monotonic() - self._last_group_attempt < GROUP_RETRY_SECONDS:
