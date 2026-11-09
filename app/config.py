@@ -36,6 +36,11 @@ class Settings:
     group_name: str = "Hillside"
     group_jid: str = ""
     webhook_token: str = ""
+    # 1x1 audio → transcript sent ONLY to the owner's own chat (ownerJid of the instance).
+    dm_transcribe: bool = True
+    owner_jid: str = ""  # optional override; otherwise resolved via instance/fetchInstances
+    # Where DM transcripts go (e.g. the "Áudios" group). Empty = owner's own chat.
+    dm_transcript_target_jid: str = ""
 
     transcriber: str = "auto"  # auto | openai | local
     openai_api_key: str = ""
@@ -52,8 +57,6 @@ class Settings:
     anthropic_model: str = "claude-haiku-5-5"
 
     reply_prefix: str = "🎧 *Resumo do áudio:*"
-    reply_footer: str = "transcrito por GitHub-LaschukResume · https://github.com/ustoppble/laschuk-resume"
-    # License-mandated: reply_footer must stay exactly as shipped; do not strip.
     max_audio_seconds: int = 1200
     max_message_age_seconds: int = 900
     max_concurrency: int = 2
@@ -111,6 +114,9 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         group_name=_get("GROUP_NAME", defaults.group_name),
         group_jid=_get("GROUP_JID"),
         webhook_token=_get("WEBHOOK_TOKEN"),
+        dm_transcribe=_get("DM_TRANSCRIBE", "1").lower() not in {"0", "false", "no", "off"},
+        owner_jid=_get("OWNER_JID"),
+        dm_transcript_target_jid=_get("DM_TRANSCRIPT_TARGET_JID"),
         transcriber=_get("TRANSCRIBER", defaults.transcriber).lower(),
         openai_api_key=_get("OPENAI_API_KEY"),
         openai_base_url=_get("OPENAI_BASE_URL", defaults.openai_base_url).rstrip("/"),
@@ -124,7 +130,6 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         anthropic_api_key=_get("ANTHROPIC_API_KEY") or _get("CLAUDE_API_KEY"),
         anthropic_model=_get("ANTHROPIC_MODEL", defaults.anthropic_model),
         reply_prefix=_get("REPLY_PREFIX", defaults.reply_prefix),
-        reply_footer=_get("REPLY_FOOTER", defaults.reply_footer) or defaults.reply_footer,
         max_audio_seconds=_int("MAX_AUDIO_SECONDS", defaults.max_audio_seconds),
         max_message_age_seconds=_int("MAX_MESSAGE_AGE_SECONDS", defaults.max_message_age_seconds),
         max_concurrency=max(1, _int("MAX_CONCURRENCY", defaults.max_concurrency)),

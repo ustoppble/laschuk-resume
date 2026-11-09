@@ -46,6 +46,41 @@ class EvolutionClient:
             data = data.get("groups") or data.get("data") or []
         return data if isinstance(data, list) else []
 
+    async def fetch_owner_jid(self) -> str:
+        """ownerJid (the instance's own WhatsApp number) via /instance/fetchInstances."""
+        url = f"{self.s.evolution_base}/instance/fetchInstances"
+        try:
+            resp = await self.http.get(
+                url, headers=self._headers, params={"instanceName": self.s.evolution_instance}, timeout=10
+            )
+        except httpx.HTTPError as exc:
+            raise EvolutionError(f"GET instance/fetchInstances: {exc.__class__.__name__}: {exc}") from exc
+        if resp.status_code >= 400:
+            raise EvolutionError(f"GET instance/fetchInstances: HTTP {resp.status_code}")
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise EvolutionError("GET instance/fetchInstances: non-JSON response") from exc
+        for item in data if isinstance(data, list) else [data]:
+            if not isinstance(item, dict):
+                continue
+            inst = item.get("instance") if isinstance(item.get("instance"), dict) else item
+            name = inst.get("name") or inst.get("instanceName")
+            if name != self.s.evolution_instance:
+                continue
+            owner = str(inst.get("ownerJid") or inst.get("owner") or "")
+            if owner.endswith("@s.whatsapp.net"):
+                return owner
+        raise EvolutionError(f"no ownerJid for instance {self.s.evolution_instance!r}")
+
+    async def send_text(self, jid: str, text: str) -> dict[str, Any]:
+        """Plain (unquoted) text message."""
+        return await self._request(
+            "POST",
+            "message/sendText",
+            json={"number": jid, "text": text, "linkPreview": False},
+        )
+
     async def get_media_base64(self, key: dict[str, Any]) -> tuple[str, str]:
         """Return (base64, mimetype) for a media message via /chat/getBase64FromMediaMessage."""
         data = await self._request(
@@ -63,8 +98,14 @@ class EvolutionClient:
     ) -> dict[str, Any]:
         # Strip inline media from the quote: Evolution only needs key + message shape.
         message = {k: v for k, v in (quoted_message or {}).items() if k != "base64"}
+        # linkPreview=false: no link-preview card cluttering the summary.
         return await self._request(
             "POST",
             "message/sendText",
-            json={"number": jid, "text": text, "quoted": {"key": quoted_key, "message": message}},
+            json={
+                "number": jid,
+                "text": text,
+                "linkPreview": False,
+                "quoted": {"key": quoted_key, "message": message},
+            },
         )

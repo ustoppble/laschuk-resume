@@ -60,10 +60,11 @@ def test_other_events_ignored(payload, event):
     assert evaluate(payload) == []
 
 
-def test_own_message_ignored(payload):
+def test_own_group_message_accepted(payload):
+    # The bot runs on the owner's own WhatsApp: the owner's audios in the group are summarized too.
     payload["data"]["key"]["fromMe"] = True
     [d] = evaluate(payload)
-    assert not d.accepted and d.reason == "own message"
+    assert d.accepted
 
 
 def test_other_group_ignored(payload):
@@ -127,7 +128,7 @@ def test_list_data_evaluates_each(payload):
     first = payload["data"]
     second = copy.deepcopy(first)
     second["key"]["id"] = "OTHER"
-    second["key"]["fromMe"] = True
+    second["key"]["remoteJid"] = "999@g.us"
     payload["data"] = [first, second]
     decisions = evaluate(payload)
     assert [d.accepted for d in decisions] == [True, False]

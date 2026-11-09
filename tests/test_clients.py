@@ -54,7 +54,7 @@ def test_evolution_endpoints_and_headers():
     assert seen[0].url.params["getParticipants"] == "false"
     assert json.loads(seen[1].content) == {"message": {"key": {"id": "M", "remoteJid": "1@g.us"}}, "convertToMp4": False}
     body = json.loads(seen[2].content)
-    assert body == {"number": "1@g.us", "text": "oi", "quoted": {"key": {"id": "M"}, "message": {"audioMessage": {}}}}
+    assert body == {"number": "1@g.us", "text": "oi", "linkPreview": False, "quoted": {"key": {"id": "M"}, "message": {"audioMessage": {}}}}
 
 
 def test_evolution_http_error_raises():
