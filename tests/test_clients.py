@@ -120,9 +120,40 @@ def test_anthropic_summarizer_request():
     assert out.splitlines() == ["Linha 1", "Linha 2", "Linha 3", "Linha 4"]
     assert captured["headers"]["x-api-key"] == "AK"
     assert captured["headers"]["anthropic-version"] == "2023-06-01"
-    assert captured["body"]["model"] == "claude-haiku-5-5"
+    assert captured["body"]["model"] == "claude-sonnet-5-5"
+    # adaptive thinking is on by default and counts toward max_tokens: leave room for it
+    assert captured["body"]["max_tokens"] >= 4096
+    assert not {"temperature", "top_p", "top_k"} & captured["body"].keys()
     assert "português" in captured["body"]["system"]
     assert "Maria" in captured["body"]["messages"][0]["content"]
+
+
+def test_anthropic_summarizer_ignores_thinking_blocks_and_honours_model_override():
+    captured = {}
+
+    def handler(req):
+        captured["body"] = json.loads(req.content)
+        return httpx.Response(200, json={
+            "stop_reason": "end_turn",
+            "content": [{"type": "thinking", "thinking": "", "signature": "sig"},
+                        {"type": "text", "text": "Linha A\nLinha B"}],
+        })
+
+    async def go():
+        async with client_with(handler) as http:
+            return await AnthropicSummarizer(settings(anthropic_model="claude-opus-5-5"), http).summarize("texto")
+
+    assert run(go()) == "Linha A\nLinha B"
+    assert captured["body"]["model"] == "claude-opus-5-5"
+
+
+def test_anthropic_model_comes_from_env(monkeypatch):
+    from app.config import load_settings
+
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-haiku-5-5")
+    assert load_settings(env_file="/nonexistent/.env").anthropic_model == "claude-haiku-5-5"
+    monkeypatch.delenv("ANTHROPIC_MODEL")
+    assert load_settings(env_file="/nonexistent/.env").anthropic_model == "claude-sonnet-5-5"
 
 
 def test_openai_summarizer_request():

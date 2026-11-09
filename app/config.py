@@ -54,7 +54,7 @@ class Settings:
 
     summarizer: str = "auto"  # auto | anthropic | openai
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-haiku-5-5"
+    anthropic_model: str = "claude-sonnet-5-5"
 
     reply_prefix: str = "🎧 *Resumo do áudio:*"
     max_audio_seconds: int = 1200

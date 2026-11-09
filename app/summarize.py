@@ -19,6 +19,10 @@ SYSTEM_PROMPT = (
     "Se o áudio for muito curto, use 2 linhas. Não invente nada que não esteja na transcrição."
 )
 
+# Current Claude models think by default (adaptive thinking) and the thinking counts toward
+# max_tokens, so a tight budget can cut the answer. The summary itself stays 2-4 lines.
+ANTHROPIC_MAX_TOKENS = 4096
+
 
 class SummaryError(RuntimeError):
     pass
@@ -53,7 +57,7 @@ class AnthropicSummarizer:
                 },
                 json={
                     "model": self.s.anthropic_model,
-                    "max_tokens": 400,
+                    "max_tokens": ANTHROPIC_MAX_TOKENS,
                     "system": SYSTEM_PROMPT,
                     "messages": [{"role": "user", "content": _user_prompt(transcript, speaker)}],
                 },
@@ -62,7 +66,10 @@ class AnthropicSummarizer:
             raise SummaryError(f"Anthropic request failed: {exc}") from exc
         if resp.status_code >= 400:
             raise SummaryError(f"Anthropic HTTP {resp.status_code}: {resp.text[:300]}")
-        blocks = resp.json().get("content") or []
+        data = resp.json()
+        if data.get("stop_reason") == "max_tokens":
+            log.warning("Anthropic summary hit max_tokens=%s; output may be cut", ANTHROPIC_MAX_TOKENS)
+        blocks = data.get("content") or []
         text = "\n".join(b.get("text", "") for b in blocks if b.get("type") == "text")
         return clean_summary(text)
 

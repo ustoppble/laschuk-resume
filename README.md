@@ -8,7 +8,7 @@ When someone in a configured group sends an audio or voice note, LaschukResume:
 2. keeps only messages from the configured group (by `GROUP_JID` or `GROUP_NAME`), ignoring its own messages and duplicates,
 3. downloads the media as base64 (`/chat/getBase64FromMediaMessage`, or inline `base64` when the webhook sends it),
 4. transcribes with the **OpenAI Whisper API** or local **faster-whisper**,
-5. summarizes **in Portuguese, in 2–4 short lines**, with **Claude Haiku** or OpenAI,
+5. summarizes **in Portuguese, in 2–4 short lines**, with **Claude Sonnet 5.5** (default, `ANTHROPIC_MODEL`) or OpenAI (`OPENAI_SUMMARY_MODEL`),
 6. replies in the same group **quoting the original audio**.
 
 ## License notice (not OSI open source)
@@ -30,6 +30,17 @@ Public repo: https://github.com/ustoppble/laschuk-resume
 - An Evolution API v2 instance connected to the WhatsApp number in the target group
 - `ANTHROPIC_API_KEY` (or `CLAUDE_API_KEY`) for summaries, or `OPENAI_API_KEY` + `OPENAI_SUMMARY_MODEL`
 - `OPENAI_API_KEY` for Whisper, or local faster-whisper
+
+## Summary model
+
+`SUMMARIZER=auto` uses Claude when `ANTHROPIC_API_KEY` (or `CLAUDE_API_KEY`) is set, otherwise OpenAI. The choice is made once at startup; there is no per-request fallback between the two.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | any Claude API model id, e.g. `claude-haiku-5-5` (cheaper) or `claude-opus-5-5` (stronger) |
+| `OPENAI_SUMMARY_MODEL` | *(empty)* | required only when summarizing with OpenAI |
+
+Current Claude models think before answering by default, and that thinking counts toward `max_tokens`, so the request allows 4096 tokens even though the summary is 2–4 lines. Do not set `temperature`/`top_p`: these models reject them.
 
 ## Setup
 
