@@ -33,6 +33,11 @@ BRT = timezone(timedelta(hours=-3), "BRT")
 # Footer for group replies only (DM transcripts sent to the Áudios group carry none).
 GROUP_FOOTER = "_transcrito por github.com/ustoppble/laschuk-resume_"
 
+# Status reactions on the original group audio (GROUP_REACTIONS); DMs never get one.
+REACTION_WORKING = "⏳"
+REACTION_DONE = "✅"
+REACTION_FAILED = "❌"
+
 
 def setup_logging(settings: Settings) -> None:
     Path(settings.log_file).parent.mkdir(parents=True, exist_ok=True)
@@ -159,6 +164,29 @@ class Bot:
                         audio.message_id, audio.seconds, self.s.max_audio_seconds)
             return None
 
+        # Groups only (incl. the Áudios group): in a DM the reaction would be visible to the sender, whose audio is not answered there.
+        react = self.s.group_reactions and audio.route in (ROUTE_GROUP, ROUTE_TRANSCRIPTS)
+        if react:
+            await self._react(audio, REACTION_WORKING)
+        try:
+            result = await self._transcribe_and_deliver(audio)
+        except Exception:
+            if react:
+                await self._react(audio, REACTION_FAILED)
+            raise
+        if react:
+            # No reply (empty transcript/summary) is a failure too, so the audio never stays on ⏳.
+            await self._react(audio, REACTION_DONE if result else REACTION_FAILED)
+        return result
+
+    async def _react(self, audio: AudioMessage, emoji: str) -> None:
+        """Best effort: a failed reaction is logged and never stops the transcript."""
+        try:
+            await self.evolution.send_reaction(audio.remote_jid, audio.key, emoji)
+        except Exception as exc:
+            log.warning("reaction %s on %s failed: %s", emoji, audio.message_id, exc)
+
+    async def _transcribe_and_deliver(self, audio: AudioMessage) -> str | None:
         b64, mimetype = audio.inline_base64, audio.mimetype
         if not b64:
             b64, fetched_mime = await self.evolution.get_media_base64(audio.key)
