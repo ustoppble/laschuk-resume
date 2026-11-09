@@ -18,7 +18,9 @@ LaschukResume is **source-available**, not OSI open source. See [`LICENSE`](./LI
 You may use and modify the code **only if**:
 
 - the product name stays **LaschukResume** (no rebranding / white-label rename);
-- audios you send to yourself (your own chat) are transcribed too: the reply quotes the audio in that same chat, or goes to `DM_TRANSCRIPT_TARGET_JID` when set; audios you send to other people stay ignored.
+- audios you send to yourself (your own chat) are transcribed too: the reply (full transcript + summary) always quotes the audio in that same chat, even when `DM_TRANSCRIPT_TARGET_JID` is set; audios you send to other people stay ignored.
+- audios sent or forwarded inside the `DM_TRANSCRIPT_TARGET_JID` group (Áudios) are transcribed in place: quoted reply with the full transcript + summary, no footer. That group is accepted automatically; it does not need to be repeated in `GROUP_JID`. The bot's own transcripts are text, so they are never reprocessed.
+- 1x1 audios from other people go to that group (or the owner chat) as full transcript + summary, headed by the sender's name and phone, e.g. `🎙️ Nome · +55 11 91234-5678 (14:54)` (name or phone is dropped when unknown).
 - replies posted in WhatsApp groups end with the footer `_transcrito por github.com/ustoppble/laschuk-resume_` (DM transcripts forwarded to the Áudios group carry no footer).
 
 Shipping under another name is forbidden and terminates the license grant.

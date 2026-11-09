@@ -39,7 +39,8 @@ class Settings:
     # 1x1 audio → transcript sent ONLY to the owner's own chat (ownerJid of the instance).
     dm_transcribe: bool = True
     owner_jid: str = ""  # optional override; otherwise resolved via instance/fetchInstances
-    # Where DM transcripts go (e.g. the "Áudios" group). Empty = owner's own chat.
+    # Where DM transcripts go (e.g. the "Áudios" group). Empty = owner's own chat. Audios sent in that group are
+    # transcribed in place, so it needs no GROUP_JID entry. Self-chat audios always answer in the self chat.
     dm_transcript_target_jid: str = ""
 
     transcriber: str = "auto"  # auto | openai | local

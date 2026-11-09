@@ -73,7 +73,7 @@ def test_dm_audio_goes_only_to_owner(lid):
     assert [m["jid"] for m in evo.plain] == [OWNER]
     assert SENDER not in evo.all_targets() and SENDER_LID not in evo.all_targets()
     text = evo.plain[0]["text"]
-    assert text.startswith("🎙️ João (15:20)\n")
+    assert text.startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")
     assert FakeTranscriber().text in text  # full transcript
     assert "\n\nResumo: Reunião do condomínio" in text
     assert text.endswith("Maria avisou o grupo.")
@@ -163,7 +163,7 @@ def test_dm_goes_to_target_group_not_sender_nor_owner(lid):
         assert client.post("/webhook", json=dm_payload(lid=lid)).json()["accepted"] == 1
     assert evo.all_targets() == [AUDIOS]
     assert evo.sent == []  # plain send_text, no quoted reply
-    assert "João" in evo.plain[0]["text"]
+    assert evo.plain[0]["text"].startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")  # LID: number from remoteJidAlt
 
 
 def test_dm_target_works_even_if_owner_unknown():
@@ -171,15 +171,6 @@ def test_dm_target_works_even_if_owner_unknown():
     with TestClient(create_app(settings, bot)) as client:
         assert client.post("/webhook", json=dm_payload()).json()["accepted"] == 1
     assert evo.all_targets() == [AUDIOS]
-
-
-def test_audio_from_target_group_not_transcribed(group_payload):
-    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
-    p = copy.deepcopy(group_payload)
-    p["data"]["key"]["remoteJid"] = AUDIOS
-    with TestClient(create_app(settings, bot)) as client:
-        assert client.post("/webhook", json=p).json()["accepted"] == 0
-    assert evo.all_targets() == []
 
 
 # --- self-chat: audio the owner sends to their own number ("Você") is transcribed too ---
@@ -211,12 +202,18 @@ def test_self_chat_audio_accepted_and_quoted_in_same_chat(lid):
     assert "\n\nResumo: Reunião do condomínio" in sent["text"]
 
 
-def test_self_chat_audio_goes_to_target_when_set():
+def test_self_chat_audio_stays_in_self_chat_even_with_target_set():
+    # Rule 3: the answer always comes back to the owner's own chat, never to the Áudios group.
     settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
     with TestClient(create_app(settings, bot)) as client:
         assert client.post("/webhook", json=self_payload()).json()["accepted"] == 1
-    assert evo.all_targets() == [AUDIOS]
-    assert evo.sent == [] and "Você" in evo.plain[0]["text"]
+    assert evo.plain == []
+    [sent] = evo.sent  # quoted reply to the audio, in the owner's own chat
+    assert sent["jid"] == OWNER and AUDIOS not in evo.all_targets()
+    assert sent["key"]["id"] == "SELFAUDIO1"
+    assert sent["text"].startswith("🎙️ Você (15:20)\n")
+    assert FakeTranscriber().text in sent["text"]
+    assert "\n\nResumo: Reunião do condomínio" in sent["text"]
 
 
 def test_self_chat_matches_owner_with_device_suffix():
@@ -261,3 +258,183 @@ def test_parse_self_route():
     assert not no_owner.accepted
     [third] = evaluate_payload(self_payload(remote=OTHER), GROUP, allow_dm=True, owner_jid=OWNER)
     assert not third.accepted and third.reason == "own dm message"
+
+
+# --- Áudios group (DM_TRANSCRIPT_TARGET_JID): audios sent/forwarded there are transcribed in place ---
+
+
+def audios_payload(msg_id="AUDIOSGRP1", from_me=False, forwarded=True, timestamp=1794075600):
+    p = json.loads(FIXTURE.read_text())
+    p["data"]["key"].update(id=msg_id, remoteJid=AUDIOS, fromMe=from_me)
+    p["data"]["messageTimestamp"] = timestamp
+    p["data"]["pushName"] = "Eu"
+    if forwarded:
+        p["data"]["message"]["audioMessage"]["contextInfo"] = {"isForwarded": True, "forwardingScore": 1}
+    return p
+
+
+def text_payload(remote, text, msg_id="TXT1", from_me=True, message_type="conversation"):
+    p = json.loads(FIXTURE.read_text())
+    p["data"]["key"].update(id=msg_id, remoteJid=remote, fromMe=from_me)
+    p["data"]["message"] = {"conversation": text} if message_type == "conversation" else {
+        "extendedTextMessage": {"text": text}
+    }
+    p["data"]["messageType"] = message_type
+    return p
+
+
+@pytest.mark.parametrize("from_me", [False, True])
+def test_audios_group_accepted_without_listing_it_in_group_jid(from_me):
+    # Rule 4: the target group is accepted automatically; GROUP_JID only holds GROUP.
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    assert AUDIOS not in settings.group_jid
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=audios_payload(from_me=from_me)).json()["accepted"] == 1
+    assert evo.plain == []
+    [sent] = evo.sent  # quoted reply in the Áudios group itself
+    assert sent["jid"] == AUDIOS and sent["key"]["id"] == "AUDIOSGRP1"
+    assert sent["text"].startswith("🎙️ Eu (15:20)\n")
+    assert FakeTranscriber().text in sent["text"]  # full transcript
+    assert "\n\nResumo: Reunião do condomínio" in sent["text"]
+    assert "github.com" not in sent["text"] and settings.reply_prefix not in sent["text"]  # no footer
+
+
+def test_audios_group_old_forwarded_audio_is_still_age_checked_like_any_other():
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS, max_message_age_seconds=900)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=audios_payload(timestamp=1)).json()["accepted"] == 0
+    assert evo.all_targets() == []
+
+
+def test_audios_group_without_target_configured_is_other_group():
+    settings, bot, evo = build()
+    [d] = evaluate_payload(audios_payload(), settings.group_jid)
+    assert not d.accepted and d.reason == "other group"
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=audios_payload()).json()["accepted"] == 0
+    assert evo.all_targets() == []
+
+
+def test_audios_group_also_listed_in_group_jid_still_gets_full_transcript_without_footer():
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS, group_jid=f"{GROUP},{AUDIOS}")
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=audios_payload()).json()["accepted"] == 1
+    [sent] = evo.sent
+    assert sent["jid"] == AUDIOS and FakeTranscriber().text in sent["text"]
+    assert "github.com" not in sent["text"]
+
+
+def test_selected_group_keeps_summary_reply_and_footer_when_target_is_set(group_payload):
+    # Rule 1 is unchanged by the Áudios group.
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=group_payload).json()["accepted"] == 1
+    [sent] = evo.sent
+    assert sent["jid"] == GROUP and evo.plain == []
+    assert sent["text"].startswith(settings.reply_prefix)
+    assert FakeTranscriber().text not in sent["text"]  # summary only, not the full transcript
+    assert sent["text"].endswith("_transcrito por github.com/ustoppble/laschuk-resume_")
+
+
+def test_third_party_dm_still_goes_to_audios_group_as_plain_text():
+    # Rule 2 is unchanged.
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=dm_payload()).json()["accepted"] == 1
+    assert evo.sent == [] and [m["jid"] for m in evo.plain] == [AUDIOS]
+    assert FakeTranscriber().text in evo.plain[0]["text"]
+
+
+@pytest.mark.parametrize("message_type", ["conversation", "extendedTextMessage"])
+@pytest.mark.parametrize("from_me", [True, False])
+def test_text_in_audios_group_is_never_processed(message_type, from_me):
+    # No loop: the bot's own transcripts are text, so they come back as "not audio" and are dropped.
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    p = text_payload(AUDIOS, "🎙️ João (15:20)\ntranscrição\n\nResumo: x", from_me=from_me, message_type=message_type)
+    [d] = evaluate_payload(p, settings.group_jid, transcript_jid=AUDIOS)
+    assert not d.accepted and d.reason.startswith("not audio")
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=p).json()["accepted"] == 0
+    assert evo.all_targets() == []
+
+
+def test_bot_reply_in_audios_group_does_not_trigger_another_reply():
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=audios_payload()).json()["accepted"] == 1
+        assert client.post("/webhook", json=dm_payload()).json()["accepted"] == 1
+    assert len(evo.sent) == 1 and len(evo.plain) == 1
+    # Echo both texts back exactly as the webhook would deliver them.
+    echoes = [text_payload(AUDIOS, m["text"], msg_id=f"ECHO{i}") for i, m in enumerate(evo.sent + evo.plain)]
+    with TestClient(create_app(settings, bot)) as client:
+        assert [client.post("/webhook", json=e).json()["accepted"] for e in echoes] == [0, 0]
+    assert len(evo.sent) == 1 and len(evo.plain) == 1  # nothing new was sent
+
+
+def test_parse_transcripts_route():
+    from app.parse import ROUTE_TRANSCRIPTS
+
+    [d] = evaluate_payload(audios_payload(), GROUP, transcript_jid=AUDIOS)
+    assert d.accepted and d.audio.route == ROUTE_TRANSCRIPTS and d.audio.remote_jid == AUDIOS
+    [other] = evaluate_payload(audios_payload(), GROUP)  # no transcript_jid → other group
+    assert not other.accepted and other.reason == "other group"
+    p = audios_payload()
+    p["data"]["key"]["remoteJid"] = "999@g.us"
+    [elsewhere] = evaluate_payload(p, GROUP, transcript_jid=AUDIOS)
+    assert not elsewhere.accepted and elsewhere.reason == "other group"
+
+
+# --- sender phone in third-party DM transcripts (fictitious numbers only) ---
+
+
+def test_format_phone():
+    from app.parse import format_phone
+
+    assert format_phone("5511912345678@s.whatsapp.net") == "+55 11 91234-5678"  # BR mobile
+    assert format_phone("551132165498@s.whatsapp.net") == "+55 11 3216-5498"  # BR landline
+    assert format_phone("5511912345678:7@s.whatsapp.net") == "+55 11 91234-5678"  # device suffix
+    assert format_phone("14155550123@s.whatsapp.net") == "+14155550123"  # other country
+    for bad in ("", "123456789012345@lid", "abc@s.whatsapp.net", "123@s.whatsapp.net", "status@broadcast"):
+        assert format_phone(bad) == ""
+
+
+def test_dm_header_has_name_and_phone_for_phone_jid():
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=dm_payload()).json()["accepted"] == 1
+    assert evo.plain[0]["text"].startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")
+
+
+def test_dm_header_without_push_name_shows_only_phone():
+    p = dm_payload()
+    del p["data"]["pushName"]
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=p).json()["accepted"] == 1
+    assert evo.plain[0]["text"].startswith("🎙️ +55 11 99999-0000 (15:20)\n")
+
+
+def test_dm_lid_uses_sender_pn_when_remote_jid_alt_is_missing():
+    p = dm_payload(lid=True)
+    p["data"]["key"]["senderPn"] = p["data"]["key"].pop("remoteJidAlt")
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=p).json()["accepted"] == 1
+    assert evo.plain[0]["text"].startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")
+
+
+def test_dm_header_with_unusable_number_falls_back_to_name_only(monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(main, "format_phone", lambda jid: "")
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=dm_payload()).json()["accepted"] == 1
+    assert evo.plain[0]["text"].startswith("🎙️ João (15:20)\n")
+
+
+def test_dm_header_to_owner_chat_also_has_phone():
+    settings, bot, evo = build()
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=dm_payload()).json()["accepted"] == 1
+    assert evo.plain[0]["text"].startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")
