@@ -118,16 +118,13 @@ def dm_contact_jid(key: dict[str, Any]) -> str:
 
 
 def format_phone(jid: str) -> str:
-    """Readable E.164 for a <number>@s.whatsapp.net JID: "+55 11 91234-5678"; "" when no usable number.
+    """E.164 with all digits together for a <number>@s.whatsapp.net JID: "+5511912345678"; "" when no usable number.
 
-    Brazil gets DDD and the hyphen (mobile 9 digits, landline 8); other countries are "+<digits>".
+    No spaces or hyphens, so WhatsApp renders the whole number as one tappable link.
     """
     digits, _, server = normalize_jid(jid).partition("@")
     if server != USER_SUFFIX[1:] or not digits.isdigit() or not 8 <= len(digits) <= 15:
         return ""
-    if digits.startswith("55") and len(digits) in (12, 13):
-        local = digits[4:]
-        return f"+55 {digits[2:4]} {local[:-4]}-{local[-4:]}"
     return f"+{digits}"
 
 
