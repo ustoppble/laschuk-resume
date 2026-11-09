@@ -180,3 +180,84 @@ def test_audio_from_target_group_not_transcribed(group_payload):
     with TestClient(create_app(settings, bot)) as client:
         assert client.post("/webhook", json=p).json()["accepted"] == 0
     assert evo.all_targets() == []
+
+
+# --- self-chat: audio the owner sends to their own number ("Você") is transcribed too ---
+
+OTHER = "5511888880000@s.whatsapp.net"
+
+
+def self_payload(lid=False, from_me=True, msg_id="SELFAUDIO1", remote=OWNER):
+    p = dm_payload(from_me=from_me, msg_id=msg_id)
+    if lid:
+        p["data"]["key"].update(remoteJid="987654321098765@lid", remoteJidAlt=remote)
+    else:
+        p["data"]["key"]["remoteJid"] = remote
+    p["data"]["pushName"] = "Eu"
+    return p
+
+
+@pytest.mark.parametrize("lid", [False, True])
+def test_self_chat_audio_accepted_and_quoted_in_same_chat(lid):
+    settings, bot, evo = build()
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=self_payload(lid=lid)).json()["accepted"] == 1
+    assert evo.plain == []
+    [sent] = evo.sent  # quoted reply to the audio, in the owner's own chat
+    assert sent["jid"] == OWNER
+    assert sent["key"]["id"] == "SELFAUDIO1" and sent["key"]["fromMe"] is True
+    assert sent["text"].startswith("🎙️ Você (15:20)\n")
+    assert FakeTranscriber().text in sent["text"]
+    assert "\n\nResumo: Reunião do condomínio" in sent["text"]
+
+
+def test_self_chat_audio_goes_to_target_when_set():
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=self_payload()).json()["accepted"] == 1
+    assert evo.all_targets() == [AUDIOS]
+    assert evo.sent == [] and "Você" in evo.plain[0]["text"]
+
+
+def test_self_chat_matches_owner_with_device_suffix():
+    settings, bot, evo = build(owner="555100000000:12@s.whatsapp.net")
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=self_payload()).json()["accepted"] == 1
+    assert [m["jid"] for m in evo.sent] == [OWNER]
+
+
+def test_self_chat_not_processed_when_owner_unknown():
+    settings, bot, evo = build(owner="")
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=self_payload()).json()["accepted"] == 0
+    assert evo.all_targets() == []
+
+
+def test_from_me_audio_to_third_party_still_ignored():
+    settings, bot, evo = build()
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=self_payload(remote=OTHER)).json()["accepted"] == 0
+        assert client.post("/webhook", json=self_payload(remote=OTHER, lid=True, msg_id="X2")).json()["accepted"] == 0
+    assert evo.all_targets() == []
+
+
+def test_self_chat_text_reply_is_not_reprocessed():
+    # The bot's own reply comes back as a fromMe *text* message in the self chat: no loop.
+    p = self_payload()
+    p["data"]["message"] = {"conversation": "🎙️ Você (15:20)\ntexto\n\nResumo: x"}
+    p["data"]["messageType"] = "conversation"
+    settings, bot, evo = build()
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=p).json()["accepted"] == 0
+    assert evo.all_targets() == []
+
+
+def test_parse_self_route():
+    from app.parse import ROUTE_SELF
+
+    [d] = evaluate_payload(self_payload(), GROUP, allow_dm=True, owner_jid=OWNER)
+    assert d.accepted and d.audio.route == ROUTE_SELF
+    [no_owner] = evaluate_payload(self_payload(), GROUP, allow_dm=True)  # owner not given → still ignored
+    assert not no_owner.accepted
+    [third] = evaluate_payload(self_payload(remote=OTHER), GROUP, allow_dm=True, owner_jid=OWNER)
+    assert not third.accepted and third.reason == "own dm message"

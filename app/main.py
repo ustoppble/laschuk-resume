@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from .config import Settings, load_settings
 from .dedupe import SeenStore
 from .evolution import EvolutionClient
-from .parse import ROUTE_DM, ROUTE_GROUP, AudioMessage, evaluate_payload, find_group_jid, iter_messages
+from .parse import ROUTE_DM, ROUTE_GROUP, ROUTE_SELF, AudioMessage, evaluate_payload, find_group_jid, iter_messages, normalize_jid
 from .summarize import Summarizer, build_summarizer
 from .transcribe import Transcriber, build_transcriber
 
@@ -112,19 +112,21 @@ class Bot:
             return {"accepted": 0, "ignored": 1}
 
         group_jid = await self.ensure_group()
-        # DMs are only accepted when we know where to send them (the owner's own chat).
-        # The owner lookup only runs when a non-group message is present, so group traffic never waits on it.
+        # DMs are only accepted when we know where to send them (the owner's own chat or the target).
+        # The owner lookup only runs when a non-group message is present, so group traffic never waits on it;
+        # the owner is also needed to recognise the self-chat even when a target JID is set.
         allow_dm = False
         if self.s.dm_transcribe and any(
             not str((m.get("key") or {}).get("remoteJid") or "").endswith("@g.us") for m in iter_messages(payload)
         ):
             try:
-                allow_dm = bool(self.s.dm_transcript_target_jid) or bool(
-                    await asyncio.wait_for(self.ensure_owner(), timeout=15))
+                await asyncio.wait_for(self.ensure_owner(), timeout=15)
             except asyncio.TimeoutError:
                 log.error("ownerJid lookup timed out; DM audios in this webhook skipped")
+            allow_dm = bool(self.s.dm_transcript_target_jid) or bool(self.owner_jid)
         decisions = evaluate_payload(
-            payload, group_jid, max_age_seconds=self.s.max_message_age_seconds, allow_dm=allow_dm
+            payload, group_jid, max_age_seconds=self.s.max_message_age_seconds, allow_dm=allow_dm,
+            owner_jid=self.owner_jid,
         )
         accepted = 0
         for d in decisions:
@@ -174,7 +176,7 @@ class Bot:
             log.warning("empty transcript for %s; no reply sent", audio.message_id)
             return None
 
-        if audio.route == ROUTE_DM:
+        if audio.route in (ROUTE_DM, ROUTE_SELF):
             return await self._deliver_dm(audio, transcript)
         if audio.route != ROUTE_GROUP:
             log.error("unknown route %r for %s; nothing sent", audio.route, audio.message_id)
@@ -185,7 +187,9 @@ class Bot:
         """1x1 audio: full transcript + short summary to the OWNER's chat only. Never the sender."""
         target = self.s.dm_transcript_target_jid or self.owner_jid
         label = "target group" if self.s.dm_transcript_target_jid else "owner chat"
-        if not target or target in {audio.remote_jid, audio.contact_jid}:
+        self_chat = audio.route == ROUTE_SELF
+        # The owner's own chat is the legitimate destination of a self-chat audio, never of a third party's.
+        if not target or (target in {audio.remote_jid, audio.contact_jid} and not self_chat):
             log.error("dm %s: %s unknown or equals source; nothing sent", audio.message_id, label)
             return None
         try:
@@ -193,13 +197,17 @@ class Bot:
         except Exception as exc:
             log.warning("dm %s: summary failed (%s); sending transcript only", audio.message_id, exc)
             summary = ""
-        name = audio.push_name or audio.contact_jid.split("@")[0] or "contato"
+        name = "Você" if self_chat else audio.push_name or audio.contact_jid.split("@")[0] or "contato"
         ts = datetime.fromtimestamp(audio.timestamp, BRT) if audio.timestamp else datetime.now(BRT)
         text = (
             f"🎙️ {name} ({ts:%H:%M})\n{transcript.strip()}\n\n"
             f"Resumo: {summary or '(indisponível)'}"
         )
-        await self.evolution.send_text(target, text)
+        if self_chat and not self.s.dm_transcript_target_jid:
+            # Quote the audio in the same self chat. The reply is plain text, so it is never reprocessed.
+            await self.evolution.send_text_reply(normalize_jid(target), text, audio.key, audio.message)
+        else:
+            await self.evolution.send_text(target, text)
         log.info("dm %s transcript delivered to %s", audio.message_id, label)
         return text
 
