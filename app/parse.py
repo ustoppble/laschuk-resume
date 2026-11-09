@@ -10,6 +10,7 @@ UPSERT_EVENTS = {"messages.upsert", "messages_upsert"}
 ROUTE_GROUP = "group"
 ROUTE_DM = "dm"
 ROUTE_SELF = "self"  # the owner's own chat ("Você"): audio they send to themselves
+ROUTE_TRANSCRIPTS = "transcripts"  # audio sent/forwarded inside the Áudios group (DM_TRANSCRIPT_TARGET_JID)
 USER_SUFFIX = "@s.whatsapp.net"
 
 # Wrappers WhatsApp uses around the real message content.
@@ -37,7 +38,8 @@ class AudioMessage:
     inline_base64: str  # filled when Evolution has WEBHOOK_BASE64 enabled
     # Explicit routing: "group" = quoted reply in the same group (original behaviour);
     # "dm" = 1x1 chat, transcript goes ONLY to the owner's own chat, never back to the sender;
-    # "self" = the owner's own chat, answered quoted in that same chat (or the DM target, if set).
+    # "self" = the owner's own chat, always answered quoted in that same chat;
+    # "transcripts" = the Áudios group, answered quoted in place with the full transcript (no footer).
     route: str = ROUTE_GROUP
     contact_jid: str = ""  # dm only: sender as <number>@s.whatsapp.net
 
@@ -106,10 +108,27 @@ def dm_contact_jid(key: dict[str, Any]) -> str:
     remote_jid = str(key.get("remoteJid") or "")
     if remote_jid.endswith(USER_SUFFIX):
         return remote_jid
-    alt = str(key.get("remoteJidAlt") or "")
-    if remote_jid.endswith("@lid") and alt.endswith(USER_SUFFIX):
-        return alt
+    if remote_jid.endswith("@lid"):
+        # The phone JID travels in remoteJidAlt (or senderPn on some Evolution versions).
+        for field in ("remoteJidAlt", "senderPn"):
+            alt = str(key.get(field) or "")
+            if alt.endswith(USER_SUFFIX):
+                return alt
     return ""
+
+
+def format_phone(jid: str) -> str:
+    """Readable E.164 for a <number>@s.whatsapp.net JID: "+55 11 91234-5678"; "" when no usable number.
+
+    Brazil gets DDD and the hyphen (mobile 9 digits, landline 8); other countries are "+<digits>".
+    """
+    digits, _, server = normalize_jid(jid).partition("@")
+    if server != USER_SUFFIX[1:] or not digits.isdigit() or not 8 <= len(digits) <= 15:
+        return ""
+    if digits.startswith("55") and len(digits) in (12, 13):
+        local = digits[4:]
+        return f"+55 {digits[2:4]} {local[:-4]}-{local[-4:]}"
+    return f"+{digits}"
 
 
 def normalize_jid(jid: Any) -> str:
@@ -126,6 +145,7 @@ def evaluate_message(
     max_age_seconds: int = 0,
     allow_dm: bool = False,
     owner_jid: str = "",
+    transcript_jid: str = "",
 ) -> Decision:
     key = item.get("key") or {}
     message_id = str(key.get("id") or "")
@@ -136,8 +156,9 @@ def evaluate_message(
     remote_jid = str(key.get("remoteJid") or "")
     route, contact_jid = ROUTE_GROUP, ""
     if remote_jid.endswith("@g.us"):
-        # Group path: unchanged from the original behaviour.
-        if not group_jid or remote_jid not in {j.strip() for j in group_jid.split(",") if j.strip()}:
+        if transcript_jid and remote_jid == transcript_jid:
+            route = ROUTE_TRANSCRIPTS  # the Áudios group is accepted without being listed in GROUP_JID
+        elif not group_jid or remote_jid not in {j.strip() for j in group_jid.split(",") if j.strip()}:
             return Decision(False, "other group", message_id)
     else:
         if remote_jid == "status@broadcast" or remote_jid.endswith("@broadcast"):
@@ -196,12 +217,13 @@ def evaluate_payload(
     max_age_seconds: int = 0,
     allow_dm: bool = False,
     owner_jid: str = "",
+    transcript_jid: str = "",
 ) -> list[Decision]:
     if not isinstance(payload, dict) or not is_upsert_event(payload):
         return []
     return [
         evaluate_message(m, group_jid, now=now, max_age_seconds=max_age_seconds, allow_dm=allow_dm,
-                         owner_jid=owner_jid)
+                         owner_jid=owner_jid, transcript_jid=transcript_jid)
         for m in iter_messages(payload)
     ]
 
