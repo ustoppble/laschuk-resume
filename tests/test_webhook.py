@@ -18,12 +18,14 @@ GROUP = "120363000000000001@g.us"
 class FakeEvolution:
     def __init__(self, groups=None):
         self.groups = groups or []
+        self.group_fetches = 0
         self.sent = []
         self.media_calls = []
         self.reactions = []
         self.events = []  # ordered ("react", emoji) / ("reply", jid) to check sequencing
 
     async def fetch_groups(self):
+        self.group_fetches += 1
         return self.groups
 
     async def get_media_base64(self, key):
@@ -136,12 +138,23 @@ def test_other_instance_ignored(payload):
 
 def test_group_resolved_by_name(payload):
     settings, bot, evo, _ = build(
-        make_settings(group_jid=""), groups=[{"id": GROUP, "subject": "Hillside"}]
+        make_settings(group_jid="", group_name="Meu Grupo"), groups=[{"id": GROUP, "subject": "Meu Grupo"}]
     )
     with TestClient(create_app(settings, bot)) as client:
         assert post(client, payload).json()["accepted"] == 1
         assert client.get("/health").json()["group_jid"] == GROUP
     assert len(evo.sent) == 1
+
+
+def test_no_group_configured_warns_and_ignores_group(payload, caplog):
+    with caplog.at_level("WARNING"):
+        settings, bot, evo, _ = build(make_settings(group_jid=""), groups=[{"id": GROUP, "subject": ""}])
+    with TestClient(create_app(settings, bot)) as client:
+        assert post(client, payload).json()["accepted"] == 0
+        assert client.get("/health").json()["group_jid"] is None
+    assert evo.group_fetches == 0
+    assert evo.sent == []
+    assert "no GROUP_NAME or GROUP_JID set" in caplog.text
 
 
 def test_inline_base64_skips_download(payload):

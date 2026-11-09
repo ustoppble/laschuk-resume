@@ -33,7 +33,7 @@ class Settings:
     evolution_url: str
     evolution_instance: str
     evolution_api_key: str
-    group_name: str = "Hillside"
+    group_name: str = ""  # set GROUP_NAME or GROUP_JID in .env; empty = group audios ignored
     group_jid: str = ""
     webhook_token: str = ""
     # 1x1 audio → transcript sent ONLY to the owner's own chat (ownerJid of the instance).

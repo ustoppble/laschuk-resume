@@ -149,15 +149,15 @@ def test_unwrap_plain_message():
 
 GROUPS = [
     {"id": "111@g.us", "subject": "Família"},
-    {"id": GROUP, "subject": "  Hillside "},
-    {"id": "222@g.us", "subject": "Hillside 2"},
+    {"id": GROUP, "subject": "  Meu Grupo "},
+    {"id": "222@g.us", "subject": "Meu Grupo 2"},
 ]
 
 
 def test_find_group_jid_by_name():
-    assert find_group_jid(GROUPS, "Hillside") == GROUP
-    assert find_group_jid(GROUPS, "hillside") == GROUP
-    assert find_group_jid({"groups": GROUPS}, "Hillside") == GROUP
+    assert find_group_jid(GROUPS, "Meu Grupo") == GROUP
+    assert find_group_jid(GROUPS, "meu grupo") == GROUP
+    assert find_group_jid({"groups": GROUPS}, "Meu Grupo") == GROUP
 
 
 def test_find_group_jid_missing():
@@ -167,7 +167,7 @@ def test_find_group_jid_missing():
 
 def test_find_group_jid_ambiguous():
     with pytest.raises(LookupError, match="several groups"):
-        find_group_jid(GROUPS + [{"id": "333@g.us", "subject": "Hillside"}], "Hillside")
+        find_group_jid(GROUPS + [{"id": "333@g.us", "subject": "Meu Grupo"}], "Meu Grupo")
 
 
 @pytest.mark.parametrize(

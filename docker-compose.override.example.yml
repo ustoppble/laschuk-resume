@@ -1,0 +1,19 @@
+# Example override: run next to an Evolution API that lives in its own Docker
+# Compose project. Joining Evolution's network lets it POST to
+# http://laschuk-resume:8787/webhook, and the host port stays on loopback only.
+#
+# Copy it (the copy is git-ignored) and set the network name of your Evolution
+# stack (see `docker network ls`):
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#   docker compose up -d --build   # docker-compose.override.yml is picked up automatically
+services:
+  laschuk-resume:
+    ports: !override
+      - "127.0.0.1:${PORT:-8787}:${PORT:-8787}"
+    networks:
+      - evolution
+
+networks:
+  evolution:
+    name: evolution_default   # replace with your Evolution stack's network
+    external: true
