@@ -20,6 +20,8 @@ class FakeEvolution:
         self.groups = groups or []
         self.sent = []
         self.media_calls = []
+        self.reactions = []
+        self.events = []  # ordered ("react", emoji) / ("reply", jid) to check sequencing
 
     async def fetch_groups(self):
         return self.groups
@@ -30,7 +32,13 @@ class FakeEvolution:
 
     async def send_text_reply(self, jid, text, quoted_key, quoted_message):
         self.sent.append({"jid": jid, "text": text, "key": quoted_key, "message": quoted_message})
+        self.events.append(("reply", jid))
         return {"key": {"id": "REPLY"}}
+
+    async def send_reaction(self, remote_jid, key, emoji):
+        self.reactions.append({"jid": remote_jid, "key": key, "emoji": emoji})
+        self.events.append(("react", emoji))
+        return {"key": {"id": "REACTION"}}
 
 
 class FakeTranscriber:
@@ -224,3 +232,129 @@ def test_settings_validation_lists_missing():
         for k, v in saved.items():
             if v is not None:
                 os.environ[k] = v
+
+
+# --- status reactions on the original group audio (⏳ → ✅, ❌ on failure) ---
+
+
+def test_group_audio_reactions_wrap_the_reply(payload):
+    settings, bot, evo, _ = build()
+    with TestClient(create_app(settings, bot)) as client:
+        assert post(client, payload).json()["accepted"] == 1
+    assert evo.events == [("react", "⏳"), ("reply", GROUP), ("react", "✅")]
+    # the reaction targets the original audio, participant included (required in groups)
+    assert all(r["jid"] == GROUP for r in evo.reactions)
+    assert evo.reactions[0]["key"] == {
+        "remoteJid": GROUP, "fromMe": False, "id": "3EB0A1B2C3D4E5F6A7B8",
+        "participant": "5511999990000@s.whatsapp.net",
+    }
+
+
+def test_hourglass_comes_before_download(payload):
+    settings, bot, evo, _ = build()
+    order = []
+    original = evo.get_media_base64
+
+    async def media(key):
+        order.append([e[1] for e in evo.events])
+        return await original(key)
+
+    evo.get_media_base64 = media
+    with TestClient(create_app(settings, bot)) as client:
+        post(client, payload)
+    assert order == [["⏳"]]
+
+
+def test_transcription_failure_reacts_cross(payload):
+    class Boom(FakeTranscriber):
+        async def transcribe(self, audio, mimetype):
+            raise RuntimeError("whisper down")
+
+    settings, bot, evo, _ = build(transcriber=Boom())
+    with TestClient(create_app(settings, bot)) as client:
+        post(client, payload)
+    assert evo.events == [("react", "⏳"), ("react", "❌")]
+
+
+def test_download_failure_reacts_cross(payload):
+    settings, bot, evo, _ = build()
+
+    async def broken(key):
+        raise RuntimeError("media gone")
+
+    evo.get_media_base64 = broken
+    with TestClient(create_app(settings, bot)) as client:
+        post(client, payload)
+    assert evo.events == [("react", "⏳"), ("react", "❌")]
+
+
+def test_empty_summary_reacts_cross(payload):
+    class Empty(FakeSummarizer):
+        async def summarize(self, transcript, speaker=""):
+            return ""
+
+    settings = make_settings()
+    evo = FakeEvolution()
+    bot = Bot(settings, evo, FakeTranscriber(), Empty(), SeenStore(":memory:"))
+    with TestClient(create_app(settings, bot)) as client:
+        post(client, payload)
+    assert evo.events == [("react", "⏳"), ("react", "❌")]
+
+
+def test_empty_transcript_reacts_cross(payload):
+    settings, bot, evo, _ = build(transcriber=FakeTranscriber(text="  "))
+    with TestClient(create_app(settings, bot)) as client:
+        post(client, payload)
+    assert evo.events == [("react", "⏳"), ("react", "❌")]
+
+
+def test_send_failure_reacts_cross(payload):
+    settings, bot, evo, _ = build()
+
+    async def broken(jid, text, quoted_key, quoted_message):
+        raise RuntimeError("send failed")
+
+    evo.send_text_reply = broken
+    with TestClient(create_app(settings, bot)) as client:
+        post(client, payload)
+    assert evo.events == [("react", "⏳"), ("react", "❌")]
+
+
+def test_reaction_failure_never_blocks_reply(payload, caplog):
+    settings, bot, evo, _ = build()
+
+    async def broken(remote_jid, key, emoji):
+        raise RuntimeError("reaction endpoint down")
+
+    evo.send_reaction = broken
+    with TestClient(create_app(settings, bot)) as client:
+        post(client, payload)
+    assert len(evo.sent) == 1
+    assert any("reaction" in r.message and r.levelname == "WARNING" for r in caplog.records)
+    assert not any("failed processing audio" in r.message for r in caplog.records)
+
+
+def test_group_reactions_can_be_disabled(payload):
+    settings, bot, evo, _ = build(make_settings(group_reactions=False))
+    with TestClient(create_app(settings, bot)) as client:
+        post(client, payload)
+    assert len(evo.sent) == 1 and evo.reactions == []
+
+
+def test_too_long_audio_gets_no_reaction(payload):
+    payload["data"]["message"]["audioMessage"]["seconds"] = 5000
+    settings, bot, evo, _ = build(make_settings(max_audio_seconds=600))
+    with TestClient(create_app(settings, bot)) as client:
+        post(client, payload)
+    assert evo.reactions == []
+
+
+@pytest.mark.parametrize("raw, expected", [(None, True), ("1", True), ("0", False), ("off", False)])
+def test_group_reactions_env(monkeypatch, raw, expected):
+    from app.config import load_settings
+
+    if raw is None:
+        monkeypatch.delenv("GROUP_REACTIONS", raising=False)
+    else:
+        monkeypatch.setenv("GROUP_REACTIONS", raw)
+    assert load_settings(env_file="/nonexistent/.env").group_reactions is expected

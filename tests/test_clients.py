@@ -57,6 +57,26 @@ def test_evolution_endpoints_and_headers():
     assert body == {"number": "1@g.us", "text": "oi", "linkPreview": False, "quoted": {"key": {"id": "M"}, "message": {"audioMessage": {}}}}
 
 
+def test_evolution_send_reaction_request():
+    seen = []
+
+    def handler(req: httpx.Request):
+        seen.append(req)
+        return httpx.Response(201, json={"key": {"id": "R"}})
+
+    key = {"remoteJid": "1@g.us", "fromMe": False, "id": "M", "participant": "5500000000000@s.whatsapp.net"}
+
+    async def go():
+        async with client_with(handler) as http:
+            await EvolutionClient(settings(), http).send_reaction("1@g.us", key, "⏳")
+
+    run(go())
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/message/sendReaction/inst"
+    assert seen[0].headers["apikey"] == "KEY"
+    assert json.loads(seen[0].content) == {"key": key, "reaction": "⏳"}
+
+
 def test_evolution_http_error_raises():
     async def go():
         async with client_with(lambda r: httpx.Response(401, text="Unauthorized")) as http:

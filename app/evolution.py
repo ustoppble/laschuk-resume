@@ -1,4 +1,4 @@
-"""Minimal Evolution API v2 client: list groups, fetch media as base64, send a quoted text."""
+"""Minimal Evolution API v2 client: list groups, fetch media as base64, send a quoted text, react."""
 from __future__ import annotations
 
 import logging
@@ -108,4 +108,12 @@ class EvolutionClient:
                 "linkPreview": False,
                 "quoted": {"key": quoted_key, "message": message},
             },
+        )
+
+    async def send_reaction(self, remote_jid: str, key: dict[str, Any], emoji: str) -> dict[str, Any]:
+        """React to a message via /message/sendReaction. In groups the key must keep `participant`."""
+        return await self._request(
+            "POST",
+            "message/sendReaction",
+            json={"key": {**key, "remoteJid": remote_jid}, "reaction": emoji},
         )

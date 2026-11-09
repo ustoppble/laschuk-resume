@@ -438,3 +438,18 @@ def test_dm_header_to_owner_chat_also_has_phone():
     with TestClient(create_app(settings, bot)) as client:
         assert client.post("/webhook", json=dm_payload()).json()["accepted"] == 1
     assert evo.plain[0]["text"].startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")
+
+@pytest.mark.parametrize("make", [dm_payload, self_payload])
+def test_dm_and_self_audio_get_no_reaction(make):
+    settings, bot, evo = build()
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=make()).json()["accepted"] == 1
+    assert evo.reactions == []
+    assert evo.plain or evo.sent  # still delivered
+
+
+def test_audios_group_audio_gets_reactions():
+    settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
+    with TestClient(create_app(settings, bot)) as client:
+        assert client.post("/webhook", json=audios_payload()).json()["accepted"] == 1
+    assert [r["emoji"] for r in evo.reactions] == ["⏳", "✅"]

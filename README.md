@@ -11,6 +11,8 @@ When someone in a configured group sends an audio or voice note, LaschukResume:
 5. summarizes **in Portuguese, in 2–4 short lines**, with **Claude Sonnet 5.5** (default, `ANTHROPIC_MODEL`) or OpenAI (`OPENAI_SUMMARY_MODEL`),
 6. replies in the same group **quoting the original audio**.
 
+While it works, the original group audio carries a status **reaction**: ⏳ as soon as the audio is accepted (before download), ✅ once the summary is posted, and ❌ if anything fails (download, transcription, empty transcript or summary, or sending the reply), so an audio never stays on ⏳. A failed reaction is only logged and never blocks the summary. Set `GROUP_REACTIONS=0` to turn it off. The same applies to audios in the Áudios (transcripts) group. DMs and your own chat never get a reaction: there the reaction would be visible to the sender.
+
 ## License notice (not OSI open source)
 
 LaschukResume is **source-available**, not OSI open source. See [`LICENSE`](./LICENSE).
