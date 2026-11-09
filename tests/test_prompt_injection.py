@@ -42,12 +42,30 @@ def test_transcript_and_speaker_are_json_data_not_prompt_delimiters():
     assert "não confiável" in SYSTEM_PROMPT.lower()
 
 
+def test_system_prompt_keeps_summary_rules():
+    # The hardening must not weaken the summary: Portuguese, 2-4 short lines, nothing invented.
+    assert "português do Brasil" in SYSTEM_PROMPT
+    assert SYSTEM_PROMPT.count("2 a 4 linhas curtas") == 2
+    assert "Não invente nada" in SYSTEM_PROMPT
+    assert SYSTEM_PROMPT.rstrip().endswith("Responda somente com o resumo, em português, com 2 a 4 linhas curtas.")
+    # The summarizer also runs on DMs, the self chat and the Áudios group, not only on groups.
+    assert "participantes do grupo" not in SYSTEM_PROMPT
+
+
+def test_empty_speaker_is_still_valid_json():
+    content = _user_prompt("  oi, tudo bem?  ", "")
+    assert json.loads(content.split("\n", 1)[1]) == {"speaker": "", "transcript": "oi, tudo bem?"}
+
+
 def test_anthropic_keeps_untrusted_audio_in_user_message_only():
     requests = []
 
     def handler(request):
         requests.append(request)
-        return httpx.Response(200, json={"content": [{"type": "text", "text": "O áudio contém um pedido dirigido ao bot.\nO participante quer alterar o resumo."}]})
+        return httpx.Response(200, json={"content": [
+            {"type": "thinking", "thinking": "", "signature": "sig"},
+            {"type": "text", "text": "O áudio contém um pedido dirigido ao bot.\nO participante quer alterar o resumo."},
+        ]})
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
@@ -58,6 +76,8 @@ def test_anthropic_keeps_untrusted_audio_in_user_message_only():
     request = requests[0]
     assert request.url.host == "api.anthropic.com"
     body = json.loads(request.content)
+    assert body["model"] == "claude-sonnet-5-5"
+    assert body["max_tokens"] >= 4096
     assert body["system"] == SYSTEM_PROMPT
     assert len(body["messages"]) == 1
     assert body["messages"][0]["role"] == "user"

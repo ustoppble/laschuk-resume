@@ -99,7 +99,8 @@ pytest
 
 ## Prompt injection hardening
 
-The audio transcript and WhatsApp speaker name are **untrusted input**. The summarizer
+The audio transcript and WhatsApp speaker name are **untrusted input**, on every route that
+summarizes (group reply, DM transcript, self chat and the Áudios group). The summarizer
 sends them as JSON data, separately from its system instructions, and explicitly asks
 the model not to follow commands embedded in the audio (including fake role markers,
 requests for secrets, and instructions to send data elsewhere).
