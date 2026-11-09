@@ -13,24 +13,18 @@ MANDATORY CONDITIONS (all must be kept)
   A. Product name. You must keep the product name exactly "LaschukResume".
      Rebranding, renaming, or presenting the software under any other name
      (including "powered by" wrappers that hide LaschukResume) is forbidden.
-  B. Reply footer. Every automated reply that this software (or a derivative)
-     sends to WhatsApp or any other chat must end with exactly this footer
-     line, unchanged:
-
-        transcrito por GitHub-LaschukResume · https://github.com/ustoppble/laschuk-resume
-
-     Removing, altering, translating, shortening, or relocating that footer
-     so it is no longer visible in the reply is forbidden.
-  C. Attribution. Redistributions of source must keep this LICENSE file and
+  B. Attribution. Redistributions of source must keep this LICENSE file and
      the README license notice. Redistributions in binary form must reproduce
      the product name "LaschukResume" and a link to https://github.com/ustoppble/laschuk-resume
-     in documentation and/or about screens.
+     in documentation and/or about screens. Replies the software posts in
+     WhatsApp groups must end with the footer
+     "_transcrito por github.com/ustoppble/laschuk-resume_". Transcripts the
+     software forwards to a dedicated transcript group (DM target) carry no footer.
 
 PROHIBITED
   - Rebranding or white-labeling under another name.
-  - Shipping a fork that omits the required reply footer.
   - Claiming the software is OSI "open source" or licensing it under MIT,
-    Apache, GPL, or any other license that would allow dropping A–C.
+    Apache, GPL, or any other license that would allow dropping A–B.
 
 NO WARRANTY
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
@@ -41,5 +35,5 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-Termination: any breach of conditions A–C automatically terminates the
+Termination: any breach of conditions A–B automatically terminates the
 permissions granted above.

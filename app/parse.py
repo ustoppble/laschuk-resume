@@ -7,6 +7,10 @@ from typing import Any, Iterable
 
 UPSERT_EVENTS = {"messages.upsert", "messages_upsert"}
 
+ROUTE_GROUP = "group"
+ROUTE_DM = "dm"
+USER_SUFFIX = "@s.whatsapp.net"
+
 # Wrappers WhatsApp uses around the real message content.
 _WRAPPERS = (
     "ephemeralMessage",
@@ -30,6 +34,10 @@ class AudioMessage:
     ptt: bool
     timestamp: int
     inline_base64: str  # filled when Evolution has WEBHOOK_BASE64 enabled
+    # Explicit routing: "group" = quoted reply in the same group (original behaviour);
+    # "dm" = 1x1 chat, transcript goes ONLY to the owner's own chat, never back to the sender.
+    route: str = ROUTE_GROUP
+    contact_jid: str = ""  # dm only: sender as <number>@s.whatsapp.net
 
 
 @dataclass(frozen=True)
@@ -87,12 +95,28 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+def dm_contact_jid(key: dict[str, Any]) -> str:
+    """Return the sender's <number>@s.whatsapp.net for a 1x1 chat, or "" if not a 1x1 chat.
+
+    WhatsApp now often addresses 1x1 chats by LID (`...@lid`) and puts the phone JID in
+    `remoteJidAlt`; both forms count as 1x1. Groups, status@broadcast, newsletters → "".
+    """
+    remote_jid = str(key.get("remoteJid") or "")
+    if remote_jid.endswith(USER_SUFFIX):
+        return remote_jid
+    alt = str(key.get("remoteJidAlt") or "")
+    if remote_jid.endswith("@lid") and alt.endswith(USER_SUFFIX):
+        return alt
+    return ""
+
+
 def evaluate_message(
     item: dict[str, Any],
     group_jid: str,
     *,
     now: float | None = None,
     max_age_seconds: int = 0,
+    allow_dm: bool = False,
 ) -> Decision:
     key = item.get("key") or {}
     message_id = str(key.get("id") or "")
@@ -101,10 +125,20 @@ def evaluate_message(
     # fromMe allowed: the bot runs on the owner's own WhatsApp; it only replies with text, so no loop.
 
     remote_jid = str(key.get("remoteJid") or "")
-    if not remote_jid.endswith("@g.us"):
-        return Decision(False, "not a group message", message_id)
-    if not group_jid or remote_jid not in {j.strip() for j in group_jid.split(",") if j.strip()}:
-        return Decision(False, "other group", message_id)
+    route, contact_jid = ROUTE_GROUP, ""
+    if remote_jid.endswith("@g.us"):
+        # Group path: unchanged from the original behaviour.
+        if not group_jid or remote_jid not in {j.strip() for j in group_jid.split(",") if j.strip()}:
+            return Decision(False, "other group", message_id)
+    else:
+        if remote_jid == "status@broadcast" or remote_jid.endswith("@broadcast"):
+            return Decision(False, "status/broadcast", message_id)
+        contact_jid = dm_contact_jid(key) if allow_dm else ""
+        if not contact_jid:
+            return Decision(False, "not a group message", message_id)
+        if key.get("fromMe") is True or str(key.get("fromMe")).lower() == "true":
+            return Decision(False, "own dm message", message_id)
+        route = ROUTE_DM
 
     raw_message = item.get("message") or {}
     content = unwrap_message(raw_message)
@@ -135,6 +169,8 @@ def evaluate_message(
             ptt=bool(audio.get("ptt")),
             timestamp=timestamp,
             inline_base64=inline if isinstance(inline, str) else "",
+            route=route,
+            contact_jid=contact_jid,
         ),
     )
 
@@ -145,11 +181,12 @@ def evaluate_payload(
     *,
     now: float | None = None,
     max_age_seconds: int = 0,
+    allow_dm: bool = False,
 ) -> list[Decision]:
     if not isinstance(payload, dict) or not is_upsert_event(payload):
         return []
     return [
-        evaluate_message(m, group_jid, now=now, max_age_seconds=max_age_seconds)
+        evaluate_message(m, group_jid, now=now, max_age_seconds=max_age_seconds, allow_dm=allow_dm)
         for m in iter_messages(payload)
     ]
 

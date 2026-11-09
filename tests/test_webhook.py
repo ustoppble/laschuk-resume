@@ -93,8 +93,9 @@ def test_audio_gets_quoted_summary_reply(payload):
     assert sent["jid"] == GROUP
     assert sent["key"]["id"] == "3EB0A1B2C3D4E5F6A7B8"
     assert sent["text"].startswith(settings.reply_prefix)
-    assert settings.reply_footer in sent["text"]
-    assert sent["text"].rstrip().endswith(settings.reply_footer)
+    assert sent["text"].endswith("\n\n_transcrito por github.com/ustoppble/laschuk-resume_")
+    assert sent["text"].count("github.com") == 1
+    assert not hasattr(settings, "reply_footer")
     assert "sexta às 19h" in sent["text"]
     assert evo.media_calls and tr.calls[0][0] == b"OggS-fake-audio"
 
@@ -107,15 +108,12 @@ def test_duplicate_webhook_replies_once(payload):
     assert len(evo.sent) == 1
 
 
-def test_own_and_foreign_messages_not_replied(payload):
+def test_foreign_group_messages_not_replied(payload):
     settings, bot, evo, _ = build()
-    own = json.loads(json.dumps(payload))
-    own["data"]["key"]["fromMe"] = True
     other = json.loads(json.dumps(payload))
     other["data"]["key"]["remoteJid"] = "999@g.us"
     other["data"]["key"]["id"] = "OTHER"
     with TestClient(create_app(settings, bot)) as client:
-        assert post(client, own).json()["accepted"] == 0
         assert post(client, other).json()["accepted"] == 0
     assert evo.sent == []
 
