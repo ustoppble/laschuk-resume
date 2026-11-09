@@ -9,6 +9,7 @@ UPSERT_EVENTS = {"messages.upsert", "messages_upsert"}
 
 ROUTE_GROUP = "group"
 ROUTE_DM = "dm"
+ROUTE_SELF = "self"  # the owner's own chat ("Você"): audio they send to themselves
 USER_SUFFIX = "@s.whatsapp.net"
 
 # Wrappers WhatsApp uses around the real message content.
@@ -35,7 +36,8 @@ class AudioMessage:
     timestamp: int
     inline_base64: str  # filled when Evolution has WEBHOOK_BASE64 enabled
     # Explicit routing: "group" = quoted reply in the same group (original behaviour);
-    # "dm" = 1x1 chat, transcript goes ONLY to the owner's own chat, never back to the sender.
+    # "dm" = 1x1 chat, transcript goes ONLY to the owner's own chat, never back to the sender;
+    # "self" = the owner's own chat, answered quoted in that same chat (or the DM target, if set).
     route: str = ROUTE_GROUP
     contact_jid: str = ""  # dm only: sender as <number>@s.whatsapp.net
 
@@ -110,6 +112,12 @@ def dm_contact_jid(key: dict[str, Any]) -> str:
     return ""
 
 
+def normalize_jid(jid: Any) -> str:
+    """Drop the multi-device suffix (`<number>:<device>@s.whatsapp.net` → `<number>@s.whatsapp.net`)."""
+    user, sep, server = str(jid or "").strip().partition("@")
+    return f"{user.split(':', 1)[0]}{sep}{server}"
+
+
 def evaluate_message(
     item: dict[str, Any],
     group_jid: str,
@@ -117,6 +125,7 @@ def evaluate_message(
     now: float | None = None,
     max_age_seconds: int = 0,
     allow_dm: bool = False,
+    owner_jid: str = "",
 ) -> Decision:
     key = item.get("key") or {}
     message_id = str(key.get("id") or "")
@@ -136,9 +145,13 @@ def evaluate_message(
         contact_jid = dm_contact_jid(key) if allow_dm else ""
         if not contact_jid:
             return Decision(False, "not a group message", message_id)
-        if key.get("fromMe") is True or str(key.get("fromMe")).lower() == "true":
-            return Decision(False, "own dm message", message_id)
-        route = ROUTE_DM
+        from_me = key.get("fromMe") is True or str(key.get("fromMe")).lower() == "true"
+        if owner_jid and normalize_jid(contact_jid) == normalize_jid(owner_jid):
+            route = ROUTE_SELF  # chat with oneself: fromMe is expected here and is accepted
+        elif from_me:
+            return Decision(False, "own dm message", message_id)  # owner → someone else: ignored
+        else:
+            route = ROUTE_DM
 
     raw_message = item.get("message") or {}
     content = unwrap_message(raw_message)
@@ -182,11 +195,13 @@ def evaluate_payload(
     now: float | None = None,
     max_age_seconds: int = 0,
     allow_dm: bool = False,
+    owner_jid: str = "",
 ) -> list[Decision]:
     if not isinstance(payload, dict) or not is_upsert_event(payload):
         return []
     return [
-        evaluate_message(m, group_jid, now=now, max_age_seconds=max_age_seconds, allow_dm=allow_dm)
+        evaluate_message(m, group_jid, now=now, max_age_seconds=max_age_seconds, allow_dm=allow_dm,
+                         owner_jid=owner_jid)
         for m in iter_messages(payload)
     ]
 
