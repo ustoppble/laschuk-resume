@@ -73,7 +73,7 @@ def test_dm_audio_goes_only_to_owner(lid):
     assert [m["jid"] for m in evo.plain] == [OWNER]
     assert SENDER not in evo.all_targets() and SENDER_LID not in evo.all_targets()
     text = evo.plain[0]["text"]
-    assert text.startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")
+    assert text.startswith("🎙️ João · +5511999990000 (15:20)\n")
     assert FakeTranscriber().text in text  # full transcript
     assert "\n\nResumo: Reunião do condomínio" in text
     assert text.endswith("Maria avisou o grupo.")
@@ -163,7 +163,7 @@ def test_dm_goes_to_target_group_not_sender_nor_owner(lid):
         assert client.post("/webhook", json=dm_payload(lid=lid)).json()["accepted"] == 1
     assert evo.all_targets() == [AUDIOS]
     assert evo.sent == []  # plain send_text, no quoted reply
-    assert evo.plain[0]["text"].startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")  # LID: number from remoteJidAlt
+    assert evo.plain[0]["text"].startswith("🎙️ João · +5511999990000 (15:20)\n")  # LID: number from remoteJidAlt
 
 
 def test_dm_target_works_even_if_owner_unknown():
@@ -390,9 +390,9 @@ def test_parse_transcripts_route():
 def test_format_phone():
     from app.parse import format_phone
 
-    assert format_phone("5511912345678@s.whatsapp.net") == "+55 11 91234-5678"  # BR mobile
-    assert format_phone("551132165498@s.whatsapp.net") == "+55 11 3216-5498"  # BR landline
-    assert format_phone("5511912345678:7@s.whatsapp.net") == "+55 11 91234-5678"  # device suffix
+    assert format_phone("5511912345678@s.whatsapp.net") == "+5511912345678"  # BR mobile
+    assert format_phone("551132165498@s.whatsapp.net") == "+551132165498"  # BR landline
+    assert format_phone("5511912345678:7@s.whatsapp.net") == "+5511912345678"  # device suffix
     assert format_phone("14155550123@s.whatsapp.net") == "+14155550123"  # other country
     for bad in ("", "123456789012345@lid", "abc@s.whatsapp.net", "123@s.whatsapp.net", "status@broadcast"):
         assert format_phone(bad) == ""
@@ -402,7 +402,7 @@ def test_dm_header_has_name_and_phone_for_phone_jid():
     settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
     with TestClient(create_app(settings, bot)) as client:
         assert client.post("/webhook", json=dm_payload()).json()["accepted"] == 1
-    assert evo.plain[0]["text"].startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")
+    assert evo.plain[0]["text"].startswith("🎙️ João · +5511999990000 (15:20)\n")
 
 
 def test_dm_header_without_push_name_shows_only_phone():
@@ -411,7 +411,7 @@ def test_dm_header_without_push_name_shows_only_phone():
     settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
     with TestClient(create_app(settings, bot)) as client:
         assert client.post("/webhook", json=p).json()["accepted"] == 1
-    assert evo.plain[0]["text"].startswith("🎙️ +55 11 99999-0000 (15:20)\n")
+    assert evo.plain[0]["text"].startswith("🎙️ +5511999990000 (15:20)\n")
 
 
 def test_dm_lid_uses_sender_pn_when_remote_jid_alt_is_missing():
@@ -420,7 +420,7 @@ def test_dm_lid_uses_sender_pn_when_remote_jid_alt_is_missing():
     settings, bot, evo = build(dm_transcript_target_jid=AUDIOS)
     with TestClient(create_app(settings, bot)) as client:
         assert client.post("/webhook", json=p).json()["accepted"] == 1
-    assert evo.plain[0]["text"].startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")
+    assert evo.plain[0]["text"].startswith("🎙️ João · +5511999990000 (15:20)\n")
 
 
 def test_dm_header_with_unusable_number_falls_back_to_name_only(monkeypatch):
@@ -437,7 +437,7 @@ def test_dm_header_to_owner_chat_also_has_phone():
     settings, bot, evo = build()
     with TestClient(create_app(settings, bot)) as client:
         assert client.post("/webhook", json=dm_payload()).json()["accepted"] == 1
-    assert evo.plain[0]["text"].startswith("🎙️ João · +55 11 99999-0000 (15:20)\n")
+    assert evo.plain[0]["text"].startswith("🎙️ João · +5511999990000 (15:20)\n")
 
 @pytest.mark.parametrize("make", [dm_payload, self_payload])
 def test_dm_and_self_audio_get_no_reaction(make):
