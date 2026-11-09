@@ -33,14 +33,17 @@ class Settings:
     evolution_url: str
     evolution_instance: str
     evolution_api_key: str
-    group_name: str = "Hillside"
+    group_name: str = ""  # set GROUP_NAME or GROUP_JID in .env; empty = group audios ignored
     group_jid: str = ""
     webhook_token: str = ""
     # 1x1 audio → transcript sent ONLY to the owner's own chat (ownerJid of the instance).
     dm_transcribe: bool = True
     owner_jid: str = ""  # optional override; otherwise resolved via instance/fetchInstances
-    # Where DM transcripts go (e.g. the "Áudios" group). Empty = owner's own chat.
+    # Where DM transcripts go (e.g. the "Áudios" group). Empty = owner's own chat. Audios sent in that group are
+    # transcribed in place, so it needs no GROUP_JID entry. Self-chat audios always answer in the self chat.
     dm_transcript_target_jid: str = ""
+    # Status reactions on the original group audio: ⏳ while working, ✅ once replied, ❌ on failure.
+    group_reactions: bool = True
 
     transcriber: str = "auto"  # auto | openai | local
     openai_api_key: str = ""
@@ -54,7 +57,7 @@ class Settings:
 
     summarizer: str = "auto"  # auto | anthropic | openai
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-haiku-5-5"
+    anthropic_model: str = "claude-sonnet-5-5"
 
     reply_prefix: str = "🎧 *Resumo do áudio:*"
     max_audio_seconds: int = 1200
@@ -117,6 +120,7 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         dm_transcribe=_get("DM_TRANSCRIBE", "1").lower() not in {"0", "false", "no", "off"},
         owner_jid=_get("OWNER_JID"),
         dm_transcript_target_jid=_get("DM_TRANSCRIPT_TARGET_JID"),
+        group_reactions=_get("GROUP_REACTIONS", "1").lower() not in {"0", "false", "no", "off"},
         transcriber=_get("TRANSCRIBER", defaults.transcriber).lower(),
         openai_api_key=_get("OPENAI_API_KEY"),
         openai_base_url=_get("OPENAI_BASE_URL", defaults.openai_base_url).rstrip("/"),

@@ -8,8 +8,10 @@ When someone in a configured group sends an audio or voice note, LaschukResume:
 2. keeps only messages from the configured group (by `GROUP_JID` or `GROUP_NAME`), ignoring its own messages and duplicates,
 3. downloads the media as base64 (`/chat/getBase64FromMediaMessage`, or inline `base64` when the webhook sends it),
 4. transcribes with the **OpenAI Whisper API** or local **faster-whisper**,
-5. summarizes **in Portuguese, in 2–4 short lines**, with **Claude Haiku** or OpenAI,
+5. summarizes **in Portuguese, in 2–4 short lines**, with **Claude Sonnet 5.5** (default, `ANTHROPIC_MODEL`) or OpenAI (`OPENAI_SUMMARY_MODEL`),
 6. replies in the same group **quoting the original audio**.
+
+While it works, the original group audio carries a status **reaction**: ⏳ as soon as the audio is accepted (before download), ✅ once the summary is posted, and ❌ if anything fails (download, transcription, empty transcript or summary, or sending the reply), so an audio never stays on ⏳. A failed reaction is only logged and never blocks the summary. Set `GROUP_REACTIONS=0` to turn it off. The same applies to audios in the Áudios (transcripts) group. DMs and your own chat never get a reaction: there the reaction would be visible to the sender.
 
 ## License notice (not OSI open source)
 
@@ -18,6 +20,9 @@ LaschukResume is **source-available**, not OSI open source. See [`LICENSE`](./LI
 You may use and modify the code **only if**:
 
 - the product name stays **LaschukResume** (no rebranding / white-label rename);
+- audios you send to yourself (your own chat) are transcribed too: the reply (full transcript + summary) always quotes the audio in that same chat, even when `DM_TRANSCRIPT_TARGET_JID` is set; audios you send to other people stay ignored.
+- audios sent or forwarded inside the `DM_TRANSCRIPT_TARGET_JID` group (Áudios) are transcribed in place: quoted reply with the full transcript + summary, no footer. That group is accepted automatically; it does not need to be repeated in `GROUP_JID`. The bot's own transcripts are text, so they are never reprocessed.
+- 1x1 audios from other people go to that group (or the owner chat) as full transcript + summary, headed by the sender's name and phone, e.g. `🎙️ Nome · +55 11 91234-5678 (14:54)` (name or phone is dropped when unknown).
 - replies posted in WhatsApp groups end with the footer `_transcrito por github.com/ustoppble/laschuk-resume_` (DM transcripts forwarded to the Áudios group carry no footer).
 
 Shipping under another name is forbidden and terminates the license grant.
@@ -31,6 +36,17 @@ Public repo: https://github.com/ustoppble/laschuk-resume
 - `ANTHROPIC_API_KEY` (or `CLAUDE_API_KEY`) for summaries, or `OPENAI_API_KEY` + `OPENAI_SUMMARY_MODEL`
 - `OPENAI_API_KEY` for Whisper, or local faster-whisper
 
+## Summary model
+
+`SUMMARIZER=auto` uses Claude when `ANTHROPIC_API_KEY` (or `CLAUDE_API_KEY`) is set, otherwise OpenAI. The choice is made once at startup; there is no per-request fallback between the two.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ANTHROPIC_MODEL` | `claude-sonnet-5-5` | any Claude API model id, e.g. `claude-haiku-5-5` (cheaper) or `claude-opus-5-5` (stronger) |
+| `OPENAI_SUMMARY_MODEL` | *(empty)* | required only when summarizing with OpenAI |
+
+Current Claude models think before answering by default, and that thinking counts toward `max_tokens`, so the request allows 4096 tokens even though the summary is 2–4 lines. Do not set `temperature`/`top_p`: these models reject them.
+
 ## Setup
 
 ```bash
@@ -42,7 +58,7 @@ tail -f logs/laschuk-resume.log
 curl -s localhost:8787/health
 ```
 
-Register the Evolution webhook at `POST $EVOLUTION_URL/webhook/set/$EVOLUTION_INSTANCE` pointing to `http://<bot-host>:8787/webhook` with `MESSAGES_UPSERT` and preferably `base64: true`. Full `curl` example is in `.env.example` comments / historical hillside docs pattern:
+Register the Evolution webhook at `POST $EVOLUTION_URL/webhook/set/$EVOLUTION_INSTANCE` pointing to `http://<bot-host>:8787/webhook` with `MESSAGES_UPSERT` and preferably `base64: true`. Example:
 
 ```bash
 set -a; source .env; set +a
@@ -61,13 +77,17 @@ curl -X POST "$EVOLUTION_URL/webhook/set/$EVOLUTION_INSTANCE" \
   }"
 ```
 
-## oc76
+## Running next to the Evolution API
+
+If Evolution runs in its own Docker Compose project, the bot can join its network so Evolution reaches the webhook at `http://laschuk-resume:8787/webhook`. Copy the example override and set your Evolution network name (`docker network ls`):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.oc76.yml up -d --build
+cp docker-compose.override.example.yml docker-compose.override.yml
+$EDITOR docker-compose.override.yml   # networks.evolution.name = your Evolution network
+docker compose up -d --build          # the override file is picked up automatically
 ```
 
-Joins the external `evolution-leonora_default` network and binds the port on loopback only.
+The override also binds the host port on loopback only. `docker-compose.override.yml` and `docker-compose.*.local.yml` are git-ignored, so each deployment keeps its real file out of the repository.
 
 ## Tests
 

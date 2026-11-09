@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from .config import Settings, load_settings
 from .dedupe import SeenStore
 from .evolution import EvolutionClient
-from .parse import ROUTE_DM, ROUTE_GROUP, AudioMessage, evaluate_payload, find_group_jid, iter_messages
+from .parse import ROUTE_DM, ROUTE_GROUP, ROUTE_SELF, ROUTE_TRANSCRIPTS, AudioMessage, evaluate_payload, find_group_jid, format_phone, iter_messages, normalize_jid
 from .summarize import Summarizer, build_summarizer
 from .transcribe import Transcriber, build_transcriber
 
@@ -32,6 +32,11 @@ BRT = timezone(timedelta(hours=-3), "BRT")
 
 # Footer for group replies only (DM transcripts sent to the Áudios group carry none).
 GROUP_FOOTER = "_transcrito por github.com/ustoppble/laschuk-resume_"
+
+# Status reactions on the original group audio (GROUP_REACTIONS); DMs never get one.
+REACTION_WORKING = "⏳"
+REACTION_DONE = "✅"
+REACTION_FAILED = "❌"
 
 
 def setup_logging(settings: Settings) -> None:
@@ -66,6 +71,8 @@ class Bot:
         self.summarizer = summarizer
         self.seen = seen
         self.group_jid = settings.group_jid
+        if not settings.group_jid and not settings.group_name:
+            log.warning("no GROUP_NAME or GROUP_JID set: group audios are ignored (DMs still follow DM_TRANSCRIBE)")
         self._group_lock = asyncio.Lock()
         self._last_group_attempt = 0.0
         self.owner_jid = settings.owner_jid
@@ -76,7 +83,7 @@ class Bot:
 
     async def ensure_group(self) -> str:
         """Resolve the group JID by name once; retry at most every GROUP_RETRY_SECONDS on failure."""
-        if self.group_jid:
+        if self.group_jid or not self.s.group_name:
             return self.group_jid
         async with self._group_lock:
             if self.group_jid or time.monotonic() - self._last_group_attempt < GROUP_RETRY_SECONDS:
@@ -112,19 +119,21 @@ class Bot:
             return {"accepted": 0, "ignored": 1}
 
         group_jid = await self.ensure_group()
-        # DMs are only accepted when we know where to send them (the owner's own chat).
-        # The owner lookup only runs when a non-group message is present, so group traffic never waits on it.
+        # DMs are only accepted when we know where to send them (the owner's own chat or the target).
+        # The owner lookup only runs when a non-group message is present, so group traffic never waits on it;
+        # the owner is also needed to recognise the self-chat even when a target JID is set.
         allow_dm = False
         if self.s.dm_transcribe and any(
             not str((m.get("key") or {}).get("remoteJid") or "").endswith("@g.us") for m in iter_messages(payload)
         ):
             try:
-                allow_dm = bool(self.s.dm_transcript_target_jid) or bool(
-                    await asyncio.wait_for(self.ensure_owner(), timeout=15))
+                await asyncio.wait_for(self.ensure_owner(), timeout=15)
             except asyncio.TimeoutError:
                 log.error("ownerJid lookup timed out; DM audios in this webhook skipped")
+            allow_dm = bool(self.s.dm_transcript_target_jid) or bool(self.owner_jid)
         decisions = evaluate_payload(
-            payload, group_jid, max_age_seconds=self.s.max_message_age_seconds, allow_dm=allow_dm
+            payload, group_jid, max_age_seconds=self.s.max_message_age_seconds, allow_dm=allow_dm,
+            owner_jid=self.owner_jid, transcript_jid=self.s.dm_transcript_target_jid,
         )
         accepted = 0
         for d in decisions:
@@ -157,6 +166,29 @@ class Bot:
                         audio.message_id, audio.seconds, self.s.max_audio_seconds)
             return None
 
+        # Groups only (incl. the Áudios group): in a DM the reaction would be visible to the sender, whose audio is not answered there.
+        react = self.s.group_reactions and audio.route in (ROUTE_GROUP, ROUTE_TRANSCRIPTS)
+        if react:
+            await self._react(audio, REACTION_WORKING)
+        try:
+            result = await self._transcribe_and_deliver(audio)
+        except Exception:
+            if react:
+                await self._react(audio, REACTION_FAILED)
+            raise
+        if react:
+            # No reply (empty transcript/summary) is a failure too, so the audio never stays on ⏳.
+            await self._react(audio, REACTION_DONE if result else REACTION_FAILED)
+        return result
+
+    async def _react(self, audio: AudioMessage, emoji: str) -> None:
+        """Best effort: a failed reaction is logged and never stops the transcript."""
+        try:
+            await self.evolution.send_reaction(audio.remote_jid, audio.key, emoji)
+        except Exception as exc:
+            log.warning("reaction %s on %s failed: %s", emoji, audio.message_id, exc)
+
+    async def _transcribe_and_deliver(self, audio: AudioMessage) -> str | None:
         b64, mimetype = audio.inline_base64, audio.mimetype
         if not b64:
             b64, fetched_mime = await self.evolution.get_media_base64(audio.key)
@@ -174,33 +206,53 @@ class Bot:
             log.warning("empty transcript for %s; no reply sent", audio.message_id)
             return None
 
-        if audio.route == ROUTE_DM:
+        if audio.route in (ROUTE_DM, ROUTE_SELF):
             return await self._deliver_dm(audio, transcript)
+        if audio.route == ROUTE_TRANSCRIPTS:
+            return await self._reply_transcripts(audio, transcript)
         if audio.route != ROUTE_GROUP:
             log.error("unknown route %r for %s; nothing sent", audio.route, audio.message_id)
             return None
         return await self._reply_group(audio, transcript)
 
+    async def _full_transcript_text(self, audio: AudioMessage, transcript: str, name: str) -> str:
+        """Header + full transcript + short summary (a failed summary never blocks the transcript)."""
+        try:
+            summary = await self.summarizer.summarize(transcript, audio.push_name)
+        except Exception as exc:
+            log.warning("%s: summary failed (%s); sending transcript only", audio.message_id, exc)
+            summary = ""
+        ts = datetime.fromtimestamp(audio.timestamp, BRT) if audio.timestamp else datetime.now(BRT)
+        return f"🎙️ {name} ({ts:%H:%M})\n{transcript.strip()}\n\nResumo: {summary or '(indisponível)'}"
+
     async def _deliver_dm(self, audio: AudioMessage, transcript: str) -> str | None:
-        """1x1 audio: full transcript + short summary to the OWNER's chat only. Never the sender."""
+        """1x1 audio: full transcript + short summary to the OWNER's side only. Never the sender."""
+        if audio.route == ROUTE_SELF:
+            # The owner's own chat always gets the answer back, even when a target group is set.
+            # Quoted, and plain text, so it is never reprocessed.
+            target = normalize_jid(self.owner_jid or audio.contact_jid)
+            text = await self._full_transcript_text(audio, transcript, "Você")
+            await self.evolution.send_text_reply(target, text, audio.key, audio.message)
+            log.info("dm %s transcript delivered to self chat", audio.message_id)
+            return text
         target = self.s.dm_transcript_target_jid or self.owner_jid
         label = "target group" if self.s.dm_transcript_target_jid else "owner chat"
         if not target or target in {audio.remote_jid, audio.contact_jid}:
             log.error("dm %s: %s unknown or equals source; nothing sent", audio.message_id, label)
             return None
-        try:
-            summary = await self.summarizer.summarize(transcript, audio.push_name)
-        except Exception as exc:
-            log.warning("dm %s: summary failed (%s); sending transcript only", audio.message_id, exc)
-            summary = ""
-        name = audio.push_name or audio.contact_jid.split("@")[0] or "contato"
-        ts = datetime.fromtimestamp(audio.timestamp, BRT) if audio.timestamp else datetime.now(BRT)
-        text = (
-            f"🎙️ {name} ({ts:%H:%M})\n{transcript.strip()}\n\n"
-            f"Resumo: {summary or '(indisponível)'}"
-        )
+        # Name and phone of the sender; each part is dropped when unknown, never an error.
+        name = " · ".join(p for p in (audio.push_name, format_phone(audio.contact_jid)) if p) or "contato"
+        text = await self._full_transcript_text(audio, transcript, name)
         await self.evolution.send_text(target, text)
         log.info("dm %s transcript delivered to %s", audio.message_id, label)
+        return text
+
+    async def _reply_transcripts(self, audio: AudioMessage, transcript: str) -> str | None:
+        """Audio sent/forwarded inside the Áudios group: full transcript + summary, quoted, no footer."""
+        name = audio.push_name or audio.participant.split("@")[0] or "contato"
+        text = await self._full_transcript_text(audio, transcript, name)
+        await self.evolution.send_text_reply(audio.remote_jid, text, audio.key, audio.message)
+        log.info("transcripts %s replied in the Áudios group", audio.message_id)
         return text
 
     async def _reply_group(self, audio: AudioMessage, transcript: str) -> str | None:
