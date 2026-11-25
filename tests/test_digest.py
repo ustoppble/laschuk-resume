@@ -387,7 +387,8 @@ def test_owner_digest_end_to_end_sends_privately():
         payload = json.loads(user.split("\n", 1)[1])
         msgs = {m["texto"]: (c["id"], m) for c in payload["conversas"] for m in c["mensagens"]}
         promise_c, promise = msgs["te mando amanhã"]
-        bug_c, bug = msgs["@99999999999999 pode ver o bug?"]
+        bug_c, bug = next(v for k, v in msgs.items() if k.endswith("pode ver o bug?"))
+        assert not any("99999999999999" in k for k in msgs)  # the raw mention became a handle
         return json.dumps({"pendencias": [
             {"conversa": promise_c, "mensagem": promise["n"], "tipo": "promessa", "urgencia": "alta",
              "o_que": "Mandar o contrato", "por_que_pendente": "ficou de mandar"},
@@ -561,3 +562,15 @@ def test_webhook_pipeline_caches_transcripts_only_for_an_enabled_digest(payload=
     on = bot(digest_group_enabled=True, digest_group_jid=group)
     run(on.process_audio(audio))
     assert on.digest_store.get_transcript(audio.message_id)
+
+
+def test_raw_mentions_and_phone_numbers_never_reach_the_model_or_the_output():
+    lines = [D.ChatLine(id="1", ts=1, sender=ANA_LID, name="Ana", kind="texto",
+                        text="@99999999999999 me liga no 11 91234-5678, @55555555555 também"),
+             D.ChatLine(id="2", ts=2, sender=OWNER_LID, name="Gui", kind="texto", text="ok", from_owner=True)]
+    roster = D.Roster(lines)
+    item = D.model_payload(lines, roster, TZ)["mensagens"][0]
+    assert item["texto"].startswith("@P2 me liga") and "@alguém também" in item["texto"]
+    out = D.render_mentions("@P1 pediu retorno no 11 91234-5678 ou +55 11 912345678 @123456789", roster, [], True)
+    assert out == "@Ana pediu retorno no [número] ou [número]"
+    assert D.render_mentions("Reunião às 19h, 3 itens, R$ 48,50", roster, [], True) == "Reunião às 19h, 3 itens, R$ 48,50"

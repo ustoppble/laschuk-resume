@@ -243,6 +243,7 @@ class Roster:
 
     def __init__(self, lines: list[ChatLine]):
         self.by_sender: dict[str, str] = {}
+        self.by_digits: dict[str, str] = {}  # user part of any JID seen for a person → handle
         self.people: dict[str, dict[str, Any]] = {}
         for line in lines:
             ident = self._ident(line)
@@ -250,6 +251,8 @@ class Roster:
                 handle = f"P{len(self.by_sender) + 1}"
                 self.by_sender[ident] = handle
                 self.people[handle] = {"jid": line.sender, "name": line.name, "owner": line.from_owner}
+            if line.sender:
+                self.by_digits.setdefault(line.sender.split("@", 1)[0], self.by_sender[ident])
             person = self.people[self.by_sender[ident]]
             if line.name:
                 person["name"] = line.name  # latest display name wins
@@ -275,6 +278,19 @@ class Roster:
 
 
 _HANDLE = re.compile(r"@?\bP(\d{1,4})\b")
+_RAW_MENTION = re.compile(r"@(\d{6,})")
+_LONG_NUMBER = re.compile(r"(?<![\w@])\+?\d[\d .\-()]{8,}\d(?!\w)")
+
+
+def anonymize_text(text: str, roster: Roster) -> str:
+    """WhatsApp keeps mentions inside the text as @<number>: swap them for handles before the model sees them."""
+    return _RAW_MENTION.sub(lambda m: "@" + roster.by_digits.get(m.group(1), "alguém"), text or "")
+
+
+def mask_numbers(text: str) -> str:
+    """Model output never needs phone-like numbers; a copied one is masked."""
+    return _LONG_NUMBER.sub(lambda m: "[número]" if sum(c.isdigit() for c in m.group(0)) >= 10 else m.group(0),
+                            text or "")
 
 
 def render_mentions(text: str, roster: Roster, mentioned: list[str], display: bool = False,
@@ -294,14 +310,14 @@ def render_mentions(text: str, roster: Roster, mentioned: list[str], display: bo
             mentioned.append(jid)
         return "@" + jid.split("@", 1)[0]
 
-    out = _HANDLE.sub(sub, text)
+    out = _HANDLE.sub(sub, _RAW_MENTION.sub("", mask_numbers(text)))
     return re.sub(r"[ \t]{2,}", " ", out).replace(" ,", ",").replace(" .", ".").strip()
 
 
 def _message_item(n: int, line: ChatLine, roster: Roster, tz: tzinfo, index: dict[str, int]) -> dict[str, Any]:
     when = datetime.fromtimestamp(line.ts, tz)
     item: dict[str, Any] = {"n": n, "dia": f"{when:%d/%m}", "hora": f"{when:%H:%M}", "de": roster.handle(line),
-                            "tipo": KIND_LABEL.get(line.kind, line.kind), "texto": line.text}
+                            "tipo": KIND_LABEL.get(line.kind, line.kind), "texto": anonymize_text(line.text, roster)}
     if line.reply_to in index:
         item["responde_a"] = index[line.reply_to]
     if line.mentions_owner:
