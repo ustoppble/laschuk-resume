@@ -96,7 +96,7 @@ class Settings:
     digest_retention_hours: int = 72  # how long cached audio transcripts are kept
     # Message text per model call. Small enough for low rate-limit tiers (e.g. 8k tokens/minute); bigger
     # days are split into several calls and merged.
-    digest_batch_chars: int = 8000
+    digest_batch_chars: int = 6000
     digest_reasoning_effort: str = ""  # OpenAI-compatible reasoning models only (e.g. "low"); empty = not sent
 
     missing: tuple[str, ...] = field(default=())

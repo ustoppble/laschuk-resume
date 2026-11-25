@@ -574,3 +574,35 @@ def test_raw_mentions_and_phone_numbers_never_reach_the_model_or_the_output():
     out = D.render_mentions("@P1 pediu retorno no 11 91234-5678 ou +55 11 912345678 @123456789", roster, [], True)
     assert out == "@Ana pediu retorno no [número] ou [número]"
     assert D.render_mentions("Reunião às 19h, 3 itens, R$ 48,50", roster, [], True) == "Reunião às 19h, 3 itens, R$ 48,50"
+
+
+def test_owner_digest_survives_a_part_that_keeps_failing(monkeypatch):
+    monkeypatch.setattr(D, "BATCH_RETRY_SECONDS", 0)
+    records = [rec(f"d{i}", f"{40 + i}000000000000@lid", ts(24, 9, i), "x" * 3000, name=f"C{i}") for i in range(3)]
+    calls = []
+
+    async def llm(system, user):
+        calls.append(user)
+        if len(calls) <= 2:  # first part fails twice (both tries of _ask) …
+            return "sem json"
+        if len(calls) <= 4:  # … and again after the pause: skipped
+            return "sem json"
+        return json.dumps({"pendencias": []})
+
+    r = runner(FakeEvolution(records=records), llm, digest_batch_chars=2000)  # one conversation per call
+    dg = run(r.build_owner(D.scheduled_at(date(2026, 11, 25), "07:00", TZ)))
+    assert dg.stats["conversas_nao_lidas"] == 1
+    assert "⚠️ 1 conversa não pôde ser lida" in dg.text
+
+
+def test_group_digest_fails_only_when_every_part_fails(monkeypatch):
+    monkeypatch.setattr(D, "BATCH_RETRY_SECONDS", 0)
+    records = [rec(str(i), GROUP, ts(24, 9) + i, "mensagem " * 40, participant=ANA_LID, name="Ana")
+               for i in range(60)]
+
+    async def llm(system, user):
+        return "sem json"
+
+    with pytest.raises(D.SummaryError):
+        run(runner(FakeEvolution(records=records), llm, digest_batch_chars=4000).build_group(
+            D.scheduled_at(date(2026, 11, 24), "18:00", TZ)))

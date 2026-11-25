@@ -55,6 +55,7 @@ SLICE_BEFORE, SLICE_AFTER = 2, 6  # context kept around each message that involv
 OUTPUT_TOKENS = 3000  # per model call (reasoning included on reasoning models)
 TRANSCRIBE_ATTEMPTS = 3
 TRANSCRIBE_RETRY_SECONDS = 20.0  # multiplied by the attempt number (audio rate limits are per minute/hour)
+BATCH_RETRY_SECONDS = 60.0  # one more try for a model call that still failed after its own retries
 TICK_SECONDS = 30
 
 # Message types that carry no conversation content for a digest.
@@ -532,7 +533,7 @@ def render_owner(items: list[dict[str, Any]], convs: list[Conversation], roster:
         body = f"{head}\n   {what}" + (f"\n   ↳ {why}" if why else "")
         grouped[conv.id].append((rank, line.ts if line else 0, body))
     if not grouped:
-        text = f"✅ Nenhuma pendência sua de {day_label} nas conversas lidas."
+        text = _skipped_note(f"✅ Nenhuma pendência sua de {day_label} nas conversas lidas.", stats)
         return Digest(JOB_OWNER, text, text, [], {**stats, "pendencias": 0, "conversas_com_pendencia": 0})
     order = sorted(grouped, key=lambda cid: (min(r for r, _, _ in grouped[cid]), min(t for _, t, _ in grouped[cid])))
     total = sum(len(v) for v in grouped.values())
@@ -548,7 +549,14 @@ def render_owner(items: list[dict[str, Any]], convs: list[Conversation], roster:
             n += 1
             out.append(f"{n}. {body}")
     text = "\n".join(out)
-    return Digest(JOB_OWNER, text, text, [], {**stats, "pendencias": total, "conversas_com_pendencia": len(order)})
+    return Digest(JOB_OWNER, _skipped_note(text, stats), _skipped_note(text, stats), [],
+                  {**stats, "pendencias": total, "conversas_com_pendencia": len(order)})
+
+
+def _skipped_note(text: str, stats: dict[str, int]) -> str:
+    n = stats.get("conversas_nao_lidas", 0)
+    return text + (f"\n\n⚠️ {n} {'conversa não pôde ser lida' if n == 1 else 'conversas não puderam ser lidas'} "
+                   "(limite do provedor do modelo)." if n else "")
 
 
 # --- storage: run markers + transcript cache ---------------------------------------------------
@@ -667,6 +675,19 @@ class DigestRunner:
             out.append(line)
         return out
 
+    async def _ask_patient(self, system: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Like _ask, but a part that still fails (e.g. the rate limit is shared with live traffic) is retried once
+        after a pause and then skipped (None) instead of losing the whole digest."""
+        for attempt in (1, 2):
+            try:
+                return await self._ask(system, payload)
+            except SummaryError as exc:
+                log.warning("digest: model call failed (%s); %s", str(exc)[:60],
+                            "retrying after a pause" if attempt == 1 else "part skipped")
+                if attempt == 1:
+                    await asyncio.sleep(BATCH_RETRY_SECONDS)
+        return None
+
     async def _ask(self, system: str, payload: dict[str, Any], note: str = "") -> dict[str, Any]:
         user = user_prompt(payload) + (f"\n\n{note}" if note else "")
         last_exc: Exception | None = None
@@ -723,8 +744,13 @@ class DigestRunner:
             for chunk in chunks:
                 part = model_payload(chunk, roster, self.tz)
                 part["participantes"] = _people(roster, {roster.handle(ln) for ln in chunk})
-                partial.extend(t for t in (await self._ask(GROUP_SYSTEM_PROMPT, part)).get("assuntos") or []
-                               if isinstance(t, dict))
+                got = await self._ask_patient(GROUP_SYSTEM_PROMPT, part)
+                if got is None:
+                    stats["partes_puladas"] = stats.get("partes_puladas", 0) + 1
+                    continue
+                partial.extend(t for t in got.get("assuntos") or [] if isinstance(t, dict))
+            if not partial:
+                raise SummaryError("every part of the group digest failed")
             system, payload = GROUP_MERGE_PROMPT, {"participantes": _people(roster), "assuntos_parciais": partial}
         data = await self._ask(system, payload)
         if any(violates_group_rule(f"{t.get('titulo', '')} {t.get('resumo', '')}")
@@ -820,9 +846,17 @@ class DigestRunner:
         batches = _batches(convs, self.s.digest_batch_chars)
         stats["chamadas_modelo"] = len(batches)
         counter = iter(range(1, 1_000_000))  # message numbers unique across the whole run
+        skipped: set[str] = set()
         for batch in batches:
             payload = self._owner_payload(batch, roster, day, owner_handle, counter)
-            items.extend((await self._ask(OWNER_SYSTEM_PROMPT, payload)).get("pendencias") or [])
+            got = await self._ask_patient(OWNER_SYSTEM_PROMPT, payload)
+            if got is None:
+                skipped.update(conv.id for conv, _ in batch)
+                continue
+            items.extend(got.get("pendencias") or [])
+        if skipped and len(skipped) == len(convs):
+            raise SummaryError("every part of the owner digest failed")
+        stats["conversas_nao_lidas"] = len(skipped)
         return render_owner(items, convs, roster, f"{day:%d/%m}", self.tz, stats)
 
     def _owner_payload(self, batch: list[tuple[Conversation, list[ChatLine]]], roster: Roster, day: date,

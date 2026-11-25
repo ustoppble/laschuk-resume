@@ -157,7 +157,7 @@ def _retry_wait(resp: httpx.Response, attempt: int) -> float:
     try:
         wait = float(raw)
     except ValueError:
-        wait = 10.0 * attempt
+        wait = 15.0 * attempt
     return max(0.5, min(wait, COMPLETE_MAX_RETRY_WAIT))
 
 
