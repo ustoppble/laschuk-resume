@@ -143,3 +143,75 @@ def build_summarizer(settings: Settings, client: httpx.AsyncClient) -> Summarize
     if mode in {"openai", "auto"} and settings.openai_api_key and settings.openai_summary_model:
         return OpenAISummarizer(settings, client)
     raise SummaryError("no summarizer configured")
+
+
+# --- Longer free-form completions (daily digests) ------------------------------------------
+# Same provider choice as build_summarizer, but no 2-4 line clean-up and a longer retry budget:
+# a digest runs once a day, so waiting out a rate limit is better than skipping the day.
+COMPLETE_MAX_ATTEMPTS = 6
+COMPLETE_MAX_RETRY_WAIT = 60.0  # seconds; caps a server-sent Retry-After
+
+
+def _retry_wait(resp: httpx.Response, attempt: int) -> float:
+    raw = resp.headers.get("retry-after", "")
+    try:
+        wait = float(raw)
+    except ValueError:
+        wait = 10.0 * attempt
+    return max(0.5, min(wait, COMPLETE_MAX_RETRY_WAIT))
+
+
+async def complete(settings: Settings, client: httpx.AsyncClient, system: str, user: str,
+                   *, max_tokens: int = 8192, usage: dict[str, int] | None = None,
+                   reasoning_effort: str = "") -> str:
+    """One system + one user message → the model's raw text. Raises SummaryError on failure.
+    When `usage` is given, the call's input/output token counts are added to it."""
+    mode = settings.summarizer
+    use_anthropic = mode == "anthropic" or (mode == "auto" and settings.anthropic_api_key)
+    if not use_anthropic and not (settings.openai_api_key and settings.openai_summary_model):
+        raise SummaryError("no summarizer configured")
+    resp = None
+    for attempt in range(1, COMPLETE_MAX_ATTEMPTS + 1):
+        try:
+            if use_anthropic:
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01",
+                             "content-type": "application/json"},
+                    json={"model": settings.anthropic_model, "max_tokens": max(max_tokens, ANTHROPIC_MAX_TOKENS),
+                          "system": system, "messages": [{"role": "user", "content": user}]},
+                )
+            else:
+                body: dict = {"model": settings.openai_summary_model, "max_completion_tokens": max_tokens,
+                              "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+                if reasoning_effort:
+                    body["reasoning_effort"] = reasoning_effort
+                resp = await client.post(
+                    f"{settings.openai_base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                    json=body,
+                )
+        except httpx.HTTPError as exc:
+            raise SummaryError(f"completion request failed: {exc.__class__.__name__}") from exc
+        retryable = resp.status_code in (429, 529) or resp.status_code >= 500
+        if not retryable or attempt == COMPLETE_MAX_ATTEMPTS:
+            break
+        wait = _retry_wait(resp, attempt)
+        log.warning("completion HTTP %s; retry %s/%s in %.1fs", resp.status_code, attempt,
+                    COMPLETE_MAX_ATTEMPTS - 1, wait)
+        await asyncio.sleep(wait)
+    if resp.status_code >= 400:
+        raise SummaryError(f"completion HTTP {resp.status_code}: {resp.text[:300]}")
+    data = resp.json()
+    if usage is not None:
+        u = data.get("usage") or {}
+        usage["calls"] = usage.get("calls", 0) + 1
+        usage["input_tokens"] = usage.get("input_tokens", 0) + int(u.get("prompt_tokens") or u.get("input_tokens") or 0)
+        usage["output_tokens"] = usage.get("output_tokens", 0) + int(
+            u.get("completion_tokens") or u.get("output_tokens") or 0)
+    if use_anthropic:
+        return "\n".join(b.get("text", "") for b in data.get("content") or [] if b.get("type") == "text")
+    choices = data.get("choices") or []
+    if choices and choices[0].get("finish_reason") == "length":
+        log.warning("completion cut at max_tokens=%s; output may be incomplete", max_tokens)
+    return (choices[0].get("message") or {}).get("content", "") if choices else ""

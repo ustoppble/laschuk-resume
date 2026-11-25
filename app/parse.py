@@ -13,6 +13,10 @@ ROUTE_SELF = "self"  # the owner's own chat ("Você"): audio they send to themse
 ROUTE_TRANSCRIPTS = "transcripts"  # audio sent/forwarded inside the Áudios group (DM_TRANSCRIPT_TARGET_JID)
 USER_SUFFIX = "@s.whatsapp.net"
 
+# Footer of every text the bot posts in a WhatsApp group (license requirement). Also lets the
+# daily digest recognise and skip the bot's own posts when it reads the group history.
+GROUP_FOOTER = "_transcrito por github.com/ustoppble/laschuk-resume_"
+
 # Wrappers WhatsApp uses around the real message content.
 _WRAPPERS = (
     "ephemeralMessage",

@@ -18,6 +18,13 @@ def _get(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
+def _bool(name: str, default: bool) -> bool:
+    raw = _get(name)
+    if not raw:
+        return default
+    return raw.lower() not in {"0", "false", "no", "off"}
+
+
 def _int(name: str, default: int) -> int:
     raw = _get(name)
     if not raw:
@@ -69,6 +76,29 @@ class Settings:
     log_level: str = "INFO"
     dedupe_db: str = str(ROOT / "data" / "seen.sqlite3")
 
+    # Daily digests (app/digest.py). Both are OFF by default.
+    # Group digest: topics of the last 24h posted in DIGEST_GROUP_JID at DIGEST_GROUP_TIME, with @mentions.
+    # Owner digest: what was left pending for the owner the day before, across ALL chats of the owner's number
+    # (1x1 chats, and in groups only what involves the owner), sent privately at DIGEST_OWNER_TIME.
+    digest_group_jid: str = ""
+    digest_group_enabled: bool = False
+    digest_group_time: str = "18:00"
+    digest_owner_enabled: bool = False
+    digest_owner_time: str = "07:00"
+    digest_owner_target_jid: str = ""  # empty = the owner's own chat (ownerJid of the instance)
+    digest_owner_instance: str = ""  # Evolution instance of the owner's number; empty = EVOLUTION_INSTANCE
+    digest_owner_scope: str = "all"  # all | dm | groups
+    digest_owner_include_jids: str = ""  # comma list; when set, ONLY these chats are read
+    digest_owner_exclude_jids: str = ""  # comma list of chats never read
+    digest_timezone: str = "America/Sao_Paulo"
+    digest_catchup_minutes: int = 120  # still send after a restart, up to this long past the scheduled time
+    digest_db: str = str(ROOT / "data" / "digest.sqlite3")
+    digest_retention_hours: int = 72  # how long cached audio transcripts are kept
+    # Message text per model call. Small enough for low rate-limit tiers (e.g. 8k tokens/minute); bigger
+    # days are split into several calls and merged.
+    digest_batch_chars: int = 8000
+    digest_reasoning_effort: str = ""  # OpenAI-compatible reasoning models only (e.g. "low"); empty = not sent
+
     missing: tuple[str, ...] = field(default=())
 
     @property
@@ -95,8 +125,28 @@ class Settings:
                 "no summarizer configured: set ANTHROPIC_API_KEY (or CLAUDE_API_KEY), "
                 "or OPENAI_API_KEY + OPENAI_SUMMARY_MODEL"
             )
+        if self.digest_group_enabled and not self.digest_group_jid.endswith("@g.us"):
+            problems.append("DIGEST_GROUP_JID must be a group JID (…@g.us) when DIGEST_GROUP_ENABLED=1")
+        if self.digest_owner_scope not in {"all", "dm", "groups"}:
+            problems.append("DIGEST_OWNER_SCOPE must be all, dm or groups")
+        if self.digest_group_enabled or self.digest_owner_enabled:
+            for name, value in (("DIGEST_GROUP_TIME", self.digest_group_time),
+                                ("DIGEST_OWNER_TIME", self.digest_owner_time)):
+                if not _valid_hhmm(value):
+                    problems.append(f"{name} must be HH:MM (24h), got {value!r}")
+            try:
+                from zoneinfo import ZoneInfo
+
+                ZoneInfo(self.digest_timezone)
+            except Exception:
+                problems.append(f"DIGEST_TIMEZONE {self.digest_timezone!r} is not a valid IANA time zone")
         if problems:
             raise ConfigError("; ".join(problems))
+
+
+def _valid_hhmm(value: str) -> bool:
+    hh, sep, mm = value.partition(":")
+    return bool(sep) and hh.isdigit() and mm.isdigit() and 0 <= int(hh) <= 23 and 0 <= int(mm) <= 59 and len(mm) == 2
 
 
 def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
@@ -141,5 +191,21 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         log_file=_get("LOG_FILE", defaults.log_file),
         log_level=_get("LOG_LEVEL", defaults.log_level).upper(),
         dedupe_db=_get("DEDUPE_DB", defaults.dedupe_db),
+        digest_group_jid=_get("DIGEST_GROUP_JID"),
+        digest_group_enabled=_bool("DIGEST_GROUP_ENABLED", defaults.digest_group_enabled),
+        digest_group_time=_get("DIGEST_GROUP_TIME", defaults.digest_group_time),
+        digest_owner_enabled=_bool("DIGEST_OWNER_ENABLED", defaults.digest_owner_enabled),
+        digest_owner_time=_get("DIGEST_OWNER_TIME", defaults.digest_owner_time),
+        digest_owner_target_jid=_get("DIGEST_OWNER_TARGET_JID"),
+        digest_owner_instance=_get("DIGEST_OWNER_INSTANCE"),
+        digest_owner_scope=_get("DIGEST_OWNER_SCOPE", defaults.digest_owner_scope).lower(),
+        digest_owner_include_jids=_get("DIGEST_OWNER_INCLUDE_JIDS"),
+        digest_owner_exclude_jids=_get("DIGEST_OWNER_EXCLUDE_JIDS"),
+        digest_timezone=_get("DIGEST_TIMEZONE", defaults.digest_timezone),
+        digest_catchup_minutes=max(0, _int("DIGEST_CATCHUP_MINUTES", defaults.digest_catchup_minutes)),
+        digest_db=_get("DIGEST_DB", defaults.digest_db),
+        digest_retention_hours=max(1, _int("DIGEST_RETENTION_HOURS", defaults.digest_retention_hours)),
+        digest_batch_chars=max(2000, _int("DIGEST_BATCH_CHARS", defaults.digest_batch_chars)),
+        digest_reasoning_effort=_get("DIGEST_REASONING_EFFORT").lower(),
         missing=missing,
     )

@@ -13,6 +13,44 @@ When someone in a configured group sends an audio or voice note, LaschukResume:
 
 While it works, the original group audio carries a status **reaction**: ⏳ as soon as the audio is accepted (before download), ✅ once the summary is posted, and ❌ if anything fails (download, transcription, empty transcript or summary, or sending the reply), so an audio never stays on ⏳. A failed reaction is only logged and never blocks the summary. Set `GROUP_REACTIONS=0` to turn it off. The same applies to audios in the Áudios (transcripts) group. DMs and your own chat never get a reaction: there the reaction would be visible to the sender.
 
+## Daily digests (optional, off by default)
+
+Two scheduled digests, each with its own switch. Both read the message history Evolution already stores
+(`/chat/findMessages`) at run time, so text messages are never copied to a new store, a restart loses nothing,
+and any past day can be previewed with the same code. Evolution must keep message history
+(`DATABASE_SAVE_DATA_NEW_MESSAGE=true`). Audios enter through their transcripts, cached in a small SQLite
+(`DIGEST_DB`, deleted after `DIGEST_RETENTION_HOURS`); the webhook pipeline fills that cache too, so an audio is
+not transcribed twice.
+
+- **Group digest** (`DIGEST_GROUP_ENABLED=1`, `DIGEST_GROUP_JID`, `DIGEST_GROUP_TIME=18:00`): the topics of the
+  24 hours before sending, posted in the group. Each topic gets a short title, 1–3 sentences and real WhatsApp
+  mentions (`@<number>` in the text + Evolution's `mentioned` field) of who brought it up or took part. It never
+  says or hints that someone went unanswered: the prompt forbids it, and a draft that does is regenerated once,
+  then the offending sentence is removed. A day without conversation sends nothing.
+- **Owner digest** (`DIGEST_OWNER_ENABLED=1`, `DIGEST_OWNER_TIME=07:00`): sent privately (`DIGEST_OWNER_TARGET_JID`,
+  default the owner's own chat). It reads every chat of the owner's number (`DIGEST_OWNER_INSTANCE`) that had
+  activity the day before and lists what is pending for the owner: unanswered messages or audios, questions,
+  requests, deadlines and the owner's own promises ("I'll send it tomorrow"). Grouped by conversation, most
+  urgent first; each item says who, what and since when. 1x1 chats are read in full. In groups only what
+  involves the owner is read (an @mention, a reply to or quote of the owner's message, the owner's first name, or
+  the owner speaking) plus a few messages around it; groups where none of that happened are dropped **before any
+  model call**, so hundreds of quiet groups cost nothing. Narrow it with `DIGEST_OWNER_SCOPE`,
+  `DIGEST_OWNER_INCLUDE_JIDS` and `DIGEST_OWNER_EXCLUDE_JIDS`.
+
+The scheduler runs inside the app (one worker) and records each run in SQLite, so a restart or a deploy near the
+scheduled time never posts twice and still sends late, up to `DIGEST_CATCHUP_MINUTES`. Days are split into model
+calls of `DIGEST_BATCH_CHARS` characters (long group days are summarized in parts and merged), which keeps each
+call inside low rate-limit tiers. Preview a past day without sending anything:
+
+```bash
+python -m app.digest group --date 2026-11-24   # as it would be posted at DIGEST_GROUP_TIME that day
+python -m app.digest owner --date 2026-11-24   # as it would be sent at DIGEST_OWNER_TIME the next morning
+```
+
+Same prompt-injection boundary as the audio summary: message text, names and transcripts go as JSON data in the
+user message, never in the system prompt, and the model only sees short handles (`P1`, `C1`, message numbers),
+never phone numbers or JIDs.
+
 ## License notice (not OSI open source)
 
 LaschukResume is **source-available**, not OSI open source. See [`LICENSE`](./LICENSE).
