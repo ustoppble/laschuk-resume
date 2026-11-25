@@ -110,3 +110,61 @@ def test_openai_keeps_untrusted_audio_in_user_message_only():
     assert "tools" not in body
     assert "EVOLUTION_TEST_KEY" not in request.content.decode()
     assert "ANTHROPIC_TEST_KEY" not in request.content.decode()
+
+
+def test_openai_retries_429_and_5xx_then_succeeds(monkeypatch):
+    import app.summarize as mod
+
+    monkeypatch.setattr(mod, "OPENAI_RETRY_DELAY", 0)
+    statuses = [429, 503]
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if statuses:
+            return httpx.Response(statuses.pop(0), text="busy")
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Linha 1.\nLinha 2."}}]})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await OpenAISummarizer(_settings(), http).summarize("oi", "")
+
+    assert asyncio.run(run()) == "Linha 1.\nLinha 2."
+    assert len(calls) == 3
+
+
+def test_openai_gives_up_after_3_attempts_and_does_not_retry_4xx(monkeypatch):
+    import app.summarize as mod
+    import pytest
+
+    monkeypatch.setattr(mod, "OPENAI_RETRY_DELAY", 0)
+
+    def make(status):
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            return httpx.Response(status, text="x")
+
+        async def run():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+                await OpenAISummarizer(_settings(), http).summarize("oi", "")
+
+        return calls, run
+
+    calls, run = make(429)
+    with pytest.raises(mod.SummaryError):
+        asyncio.run(run())
+    assert len(calls) == 3
+    calls, run = make(401)
+    with pytest.raises(mod.SummaryError):
+        asyncio.run(run())
+    assert len(calls) == 1
+
+
+def test_system_prompt_has_strict_rules():
+    low = SYSTEM_PROMPT.lower()
+    assert "sem nenhum emoji" in low
+    assert "exatamente como foram falados" in low
+    assert "ambíguo" in low
+    assert "quem faz o quê" in low
