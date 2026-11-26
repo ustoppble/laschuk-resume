@@ -82,6 +82,8 @@ class Settings:
     # (1x1 chats, and in groups only what involves the owner), sent privately at DIGEST_OWNER_TIME.
     digest_group_jid: str = ""
     digest_group_enabled: bool = False
+    # Poll "Esse resumo foi útil?" (SIM / NÃO) right after the group digest; only when the group digest is on.
+    digest_group_feedback_poll: bool = True
     digest_group_time: str = "08:00"
     digest_owner_enabled: bool = False
     digest_owner_time: str = "07:00"
@@ -204,6 +206,7 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         dedupe_db=_get("DEDUPE_DB", defaults.dedupe_db),
         digest_group_jid=_get("DIGEST_GROUP_JID"),
         digest_group_enabled=_bool("DIGEST_GROUP_ENABLED", defaults.digest_group_enabled),
+        digest_group_feedback_poll=_bool("DIGEST_GROUP_FEEDBACK_POLL", defaults.digest_group_feedback_poll),
         digest_group_time=_get("DIGEST_GROUP_TIME", defaults.digest_group_time),
         digest_owner_enabled=_bool("DIGEST_OWNER_ENABLED", defaults.digest_owner_enabled),
         digest_owner_time=_get("DIGEST_OWNER_TIME", defaults.digest_owner_time),

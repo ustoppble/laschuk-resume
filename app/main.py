@@ -18,9 +18,9 @@ from fastapi import FastAPI, HTTPException, Request
 
 from .config import Settings, load_settings
 from .dedupe import SeenStore
-from .digest import DigestRunner, DigestScheduler, DigestStore, owner_evolution_client
+from .digest import DigestRunner, DigestScheduler, DigestStore, owner_evolution_client, poll_vote_from_message
 from .evolution import EvolutionClient
-from .parse import GROUP_FOOTER, ROUTE_DM, ROUTE_GROUP, ROUTE_SELF, ROUTE_TRANSCRIPTS, AudioMessage, evaluate_payload, find_group_jid, format_phone, iter_messages, normalize_jid
+from .parse import GROUP_FOOTER, ROUTE_DM, ROUTE_GROUP, ROUTE_SELF, ROUTE_TRANSCRIPTS, AudioMessage, evaluate_payload, find_group_jid, format_phone, is_upsert_event, iter_messages, normalize_jid
 from .summarize import Summarizer, build_summarizer
 from .transcribe import Transcriber, build_transcriber
 
@@ -120,6 +120,7 @@ class Bot:
             log.debug("ignoring webhook for instance %r", instance)
             return {"accepted": 0, "ignored": 1}
 
+        self._record_poll_votes(payload)
         group_jid = await self.ensure_group()
         # DMs are only accepted when we know where to send them (the owner's own chat or the target).
         # The owner lookup only runs when a non-group message is present, so group traffic never waits on it;
@@ -217,6 +218,20 @@ class Bot:
             log.error("unknown route %r for %s; nothing sent", audio.route, audio.message_id)
             return None
         return await self._reply_group(audio, transcript)
+
+    def _record_poll_votes(self, payload: dict[str, Any]) -> None:
+        """Votes on the group digest's feedback poll (Evolution v2 delivers them already decrypted)."""
+        if self.digest_store is None or not is_upsert_event(payload):
+            return
+        for m in iter_messages(payload):
+            vote = poll_vote_from_message(m)
+            if vote is None:
+                continue
+            try:
+                if self.digest_store.record_vote(*vote):
+                    log.info("feedback poll vote recorded (%s)", "/".join(vote[2]) or "retirado")
+            except Exception as exc:
+                log.warning("feedback poll vote not recorded: %s", exc.__class__.__name__)
 
     def _cache_for_digest(self, audio: AudioMessage, transcript: str) -> None:
         """Keep the transcript for the daily digest that will read this chat, so it is not transcribed twice."""

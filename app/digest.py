@@ -651,6 +651,43 @@ def _skipped_note(text: str, stats: dict[str, int]) -> str:
                    "(limite do provedor do modelo)." if n else "")
 
 
+# --- feedback poll ------------------------------------------------------------------------------
+
+POLL_QUESTION = "Esse resumo foi útil?"
+POLL_YES, POLL_NO = "SIM", "NÃO"
+
+
+def _poll_option(raw: Any) -> str:
+    t = _fold(str(raw or "")).strip().upper()
+    return POLL_YES if t == "SIM" else POLL_NO if t in {"NAO", "NÃO"} else ""
+
+
+def poll_vote_from_message(message: dict[str, Any]) -> tuple[str, str, list[str], float] | None:
+    """A vote from a messages.upsert item. Evolution v2 (2.3.7) decrypts the vote itself and puts the chosen
+    option NAMES in message.pollUpdateMessage.vote.selectedOptions, plus pollUpdates[].voters with the voter that
+    decrypted. Returns (poll id, voter, option names, timestamp) or None."""
+    msg = message.get("message") if isinstance(message.get("message"), dict) else {}
+    upd = msg.get("pollUpdateMessage") if isinstance(msg.get("pollUpdateMessage"), dict) else None
+    if upd is None:
+        return None
+    poll_id = str(((upd.get("pollCreationMessageKey") or {}).get("id")) or "")
+    vote = upd.get("vote") if isinstance(upd.get("vote"), dict) else {}
+    options = [o for o in vote.get("selectedOptions") or [] if isinstance(o, str)]
+    voters = [v for u in message.get("pollUpdates") or [] if isinstance(u, dict)
+              for v in u.get("voters") or [] if isinstance(v, str)]
+    key = message.get("key") or {}
+    voter = normalize_jid(voters[0] if voters else (key.get("participantAlt") or key.get("participant")
+                                                    or key.get("remoteJid") or ""))
+    ts = float(_int(message.get("messageTimestamp"), 0) or time.time())
+    if not poll_id or not voter:
+        return None
+    return poll_id, voter, options, ts
+
+
+def poll_line(result: tuple[int, int]) -> str:
+    return f"Resumo do grupo de ontem: {result[0]} SIM, {result[1]} NÃO"
+
+
 # --- storage: run markers + transcript cache ---------------------------------------------------
 
 class DigestStore:
@@ -661,6 +698,9 @@ class DigestStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("CREATE TABLE IF NOT EXISTS runs (job TEXT, day TEXT, at REAL, PRIMARY KEY (job, day))")
         self._conn.execute("CREATE TABLE IF NOT EXISTS transcripts (id TEXT PRIMARY KEY, text TEXT, at REAL)")
+        self._conn.execute("CREATE TABLE IF NOT EXISTS polls (id TEXT PRIMARY KEY, day TEXT, chat TEXT, at REAL)")
+        self._conn.execute("CREATE TABLE IF NOT EXISTS poll_votes (poll_id TEXT, voter TEXT, option TEXT, ts REAL, "
+                           "PRIMARY KEY (poll_id, voter))")
         self._lock = threading.Lock()
         self._retention = retention_hours * 3600
         self.prune()
@@ -684,10 +724,46 @@ class DigestStore:
         with self._lock:
             self._conn.execute("INSERT OR REPLACE INTO transcripts VALUES (?, ?, ?)", (message_id, text, time.time()))
 
+    # -- feedback poll after the group digest --
+
+    def add_poll(self, poll_id: str, day: str, chat: str) -> None:
+        with self._lock:
+            self._conn.execute("INSERT OR REPLACE INTO polls VALUES (?, ?, ?, ?)", (poll_id, day, chat, time.time()))
+
+    def record_vote(self, poll_id: str, voter: str, options: list[str], ts: float) -> bool:
+        """Last vote per person wins (by message time); an empty selection removes the vote. False when the poll
+        is not one of ours."""
+        with self._lock:
+            if self._conn.execute("SELECT 1 FROM polls WHERE id=?", (poll_id,)).fetchone() is None:
+                return False
+            row = self._conn.execute("SELECT ts FROM poll_votes WHERE poll_id=? AND voter=?",
+                                     (poll_id, voter)).fetchone()
+            if row and row[0] > ts:
+                return True  # an older vote arriving late never overrides a newer one
+            choice = next((o for o in (_poll_option(x) for x in options) if o), "")
+            if choice:
+                self._conn.execute("INSERT OR REPLACE INTO poll_votes VALUES (?, ?, ?, ?)", (poll_id, voter, choice, ts))
+            else:
+                self._conn.execute("DELETE FROM poll_votes WHERE poll_id=? AND voter=?", (poll_id, voter))
+            return True
+
+    def poll_result(self, day: str) -> tuple[int, int] | None:
+        """(SIM, NÃO) of the poll sent with the group digest on `day` (send date), or None if none was sent."""
+        with self._lock:
+            row = self._conn.execute("SELECT id FROM polls WHERE day=? ORDER BY at DESC LIMIT 1", (day,)).fetchone()
+            if row is None:
+                return None
+            counts = dict(self._conn.execute("SELECT option, COUNT(*) FROM poll_votes WHERE poll_id=? GROUP BY option",
+                                             (row[0],)).fetchall())
+        return counts.get(POLL_YES, 0), counts.get(POLL_NO, 0)
+
     def prune(self) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM transcripts WHERE at < ?", (time.time() - self._retention,))
             self._conn.execute("DELETE FROM runs WHERE at < ?", (time.time() - 30 * 86400,))
+            old = time.time() - 30 * 86400
+            self._conn.execute("DELETE FROM poll_votes WHERE poll_id IN (SELECT id FROM polls WHERE at < ?)", (old,))
+            self._conn.execute("DELETE FROM polls WHERE at < ?", (old,))
 
     def close(self) -> None:
         with self._lock:
@@ -956,7 +1032,12 @@ class DigestRunner:
         if skipped and len(skipped) == len(convs):
             raise SummaryError("every part of the owner digest failed")
         stats["conversas_nao_lidas"] = len(skipped)
-        return render_owner(items, convs, roster, f"{day:%d/%m}", self.tz, stats)
+        digest = render_owner(items, convs, roster, f"{day:%d/%m}", self.tz, stats)
+        result = self.store.poll_result((send_at.date() - timedelta(days=1)).isoformat()) if self.store else None
+        if result is not None:  # the group digest's poll sent yesterday, one line under the header
+            head, _, rest = digest.text.partition("\n")
+            digest.text = digest.display = f"{head}\n{poll_line(result)}" + (f"\n{rest}" if rest else "")
+        return digest
 
     def _owner_payload(self, batch: list[tuple[Conversation, list[ChatLine]]], roster: Roster, day: date,
                        owner_handle: str, counter: Any) -> dict[str, Any]:
@@ -977,12 +1058,26 @@ class DigestRunner:
 
     # -- sending --
 
+    async def _send_feedback_poll(self, send_at: datetime) -> None:
+        """The poll never blocks the digest: a failure is only logged."""
+        try:
+            sent = await self.evolution.send_poll(self.s.digest_group_jid, POLL_QUESTION, [POLL_YES, POLL_NO], 1)
+            poll_id = str(((sent or {}).get("key") or {}).get("id") or "")
+            if poll_id and self.store:
+                self.store.add_poll(poll_id, send_at.date().isoformat(), self.s.digest_group_jid)
+            elif not poll_id:
+                log.warning("digest: feedback poll sent but no message id came back; votes will not be counted")
+        except Exception as exc:
+            log.warning("digest: feedback poll not sent (%s)", exc.__class__.__name__)
+
     async def run_job(self, job: str, send_at: datetime) -> Digest | None:
         """Build and SEND one digest. Callers decide when (DigestScheduler) and claim the run first."""
         if job == JOB_GROUP:
             digest = await self.build_group(send_at)
             if digest:
                 await self.evolution.send_text(self.s.digest_group_jid, digest.text, mentioned=digest.mentioned)
+                if self.s.digest_group_feedback_poll:
+                    await self._send_feedback_poll(send_at)
         else:
             digest = await self.build_owner(send_at)
             target = self.s.digest_owner_target_jid or await self._owner()

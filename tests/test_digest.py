@@ -62,6 +62,7 @@ class FakeEvolution:
         self.profile = profile
         self.subjects = subjects or {}
         self.sent = []
+        self.polls = []
         self.find_calls = []
 
     async def find_messages(self, jid, start_ts, end_ts):
@@ -85,6 +86,10 @@ class FakeEvolution:
 
     async def send_text(self, jid, text, mentioned=None):
         self.sent.append({"jid": jid, "text": text, "mentioned": mentioned})
+
+    async def send_poll(self, jid, name, values, selectable_count=1):
+        self.polls.append({"jid": jid, "name": name, "values": values, "selectable": selectable_count})
+        return {"key": {"id": f"POLL{len(self.polls)}", "remoteJid": jid}}
         return {}
 
 
@@ -802,3 +807,98 @@ def test_digest_provider_env_and_validation(monkeypatch, tmp_path):
     with pytest.raises(ConfigError, match="DIGEST_PROVIDER"):
         Settings(evolution_url="u", evolution_instance="i", evolution_api_key="k", anthropic_api_key="a",
                  digest_provider="outro").validate()
+
+
+
+# --- feedback poll ------------------------------------------------------------------------------
+
+def _vote(poll_id, voter, options, at, decrypted_voter=None):
+    return {"key": {"id": f"v{at}", "remoteJid": GROUP, "participant": voter, "fromMe": False},
+            "messageType": "pollUpdateMessage", "messageTimestamp": at,
+            "message": {"pollUpdateMessage": {"pollCreationMessageKey": {"id": poll_id, "remoteJid": GROUP},
+                                              "vote": {"selectedOptions": options}}},
+            "pollUpdates": [{"name": o, "voters": [decrypted_voter or voter]} for o in ("SIM", "NÃO")
+                            if o in options]}
+
+
+def test_feedback_poll_goes_right_after_the_group_digest_and_is_stored():
+    evo = FakeEvolution(records=_group_records())
+    r = runner(evo, FakeLLM({"destaques": [{"titulo": "Deploy fica simples", "contexto": "@P1 perguntou.",
+                                            "sacada": SACADA, "puxou": "P1", "tipo": "dica"}]}),
+               digest_group_enabled=True)
+    run(r.run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
+    assert len(evo.sent) == 1 and evo.polls == [{"jid": GROUP, "name": "Esse resumo foi útil?",
+                                                 "values": ["SIM", "NÃO"], "selectable": 1}]
+    assert r.store.poll_result("2026-11-25") == (0, 0)
+
+
+def test_no_feedback_poll_on_a_day_without_highlight_or_when_turned_off():
+    evo = FakeEvolution(records=_group_records())
+    run(runner(evo, FakeLLM({"destaques": []})).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
+    assert evo.sent == [] and evo.polls == []
+    evo2 = FakeEvolution(records=_group_records())
+    good = {"destaques": [{"titulo": "Deploy fica simples", "contexto": "@P1 perguntou.", "sacada": SACADA,
+                           "puxou": "P1", "tipo": "dica"}]}
+    run(runner(evo2, FakeLLM(good), digest_group_feedback_poll=False).run_job(
+        D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
+    assert len(evo2.sent) == 1 and evo2.polls == []
+
+
+def test_poll_votes_count_last_vote_per_person_and_ignore_other_polls():
+    store = D.DigestStore(":memory:")
+    store.add_poll("P1", "2026-11-25", GROUP)
+    for m in [_vote("P1", ANA_LID, ["SIM"], 100), _vote("P1", BRUNO_LID, ["SIM"], 101),
+              _vote("P1", ANA_LID, ["NÃO"], 200),  # Ana changed her vote
+              _vote("P1", BRUNO_LID, ["NÃO"], 50),  # older vote arriving late: ignored
+              _vote("OTHER", ANA_LID, ["SIM"], 300)]:
+        store.record_vote(*D.poll_vote_from_message(m))
+    assert store.poll_result("2026-11-25") == (1, 1)
+    store.record_vote(*D.poll_vote_from_message(_vote("P1", BRUNO_LID, [], 400)))  # vote removed
+    assert store.poll_result("2026-11-25") == (0, 1)
+    assert store.poll_result("2026-11-24") is None
+    assert D.poll_vote_from_message({"message": {"conversation": "oi"}}) is None
+
+
+def test_webhook_records_poll_votes(tmp_path):
+    from app.dedupe import SeenStore
+    from app.main import Bot
+    from tests.test_webhook import FakeEvolution as WebhookEvolution, FakeSummarizer, FakeTranscriber as FT
+    s = Settings(evolution_url="http://e.invalid", evolution_instance="i", evolution_api_key="k",
+                 anthropic_api_key="a", group_jid=GROUP, max_message_age_seconds=0)
+    store = D.DigestStore(":memory:")
+    store.add_poll("P1", "2026-11-25", GROUP)
+    bot = Bot(s, WebhookEvolution(), FT(), FakeSummarizer(), SeenStore(":memory:"), store)
+    run(bot.handle_payload({"event": "messages.upsert", "instance": "i", "data": _vote("P1", ANA_LID, ["SIM"], 10)}))
+    assert store.poll_result("2026-11-25") == (1, 0)
+
+
+def test_owner_digest_gets_one_line_with_yesterdays_poll_result():
+    send = D.scheduled_at(date(2026, 11, 25), "07:00", TZ)  # the owner records are from 24/11
+    r = runner(FakeEvolution(records=_owner_records()), FakeLLM({"pendencias": []}))
+    before = run(r.build_owner(send)).text
+    assert "Resumo do grupo de ontem" not in before  # no poll sent yesterday: no line
+    r.store.add_poll("P1", "2026-11-24", GROUP)  # sent with the group digest on 24/11 (the day before)
+    for m in [_vote("P1", ANA_LID, ["SIM"], 1), _vote("P1", BRUNO_LID, ["SIM"], 2),
+              _vote("P1", CLIENT_DM, ["NÃO"], 3)]:
+        r.store.record_vote(*D.poll_vote_from_message(m))
+    after = run(r.build_owner(send)).text
+    lines = after.split("\n")
+    assert lines[1] == "Resumo do grupo de ontem: 2 SIM, 1 NÃO"
+    assert "\n".join([lines[0]] + lines[2:]) == before  # the only change to the private digest
+
+
+def test_evolution_send_poll_body():
+    seen = []
+
+    def handler(req: httpx.Request):
+        seen.append(req)
+        return httpx.Response(201, json={"key": {"id": "ABC", "remoteJid": GROUP}})
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await EvolutionClient(settings(), http).send_poll(GROUP, D.POLL_QUESTION, ["SIM", "NÃO"], 1)
+
+    assert run(go())["key"]["id"] == "ABC"
+    assert seen[0].url.path == "/message/sendPoll/inst"
+    assert json.loads(seen[0].content) == {"number": GROUP, "name": "Esse resumo foi útil?", "selectableCount": 1,
+                                           "values": ["SIM", "NÃO"]}

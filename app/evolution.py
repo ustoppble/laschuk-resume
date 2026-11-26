@@ -107,6 +107,12 @@ class EvolutionClient:
             body["mentioned"] = list(mentioned)
         return await self._request("POST", "message/sendText", json=body)
 
+    async def send_poll(self, jid: str, name: str, values: list[str], selectable_count: int = 1) -> dict[str, Any]:
+        """Poll via Evolution v2 /message/sendPoll (SendPollDto: name, selectableCount, values)."""
+        return await self._request("POST", "message/sendPoll",
+                                   json={"number": jid, "name": name, "selectableCount": selectable_count,
+                                         "values": list(values)})
+
     async def find_group_info(self, group_jid: str) -> dict[str, Any]:
         """Subject + participants of one group via /group/findGroupInfos."""
         data = await self._request("GET", "group/findGroupInfos", params={"groupJid": group_jid})
