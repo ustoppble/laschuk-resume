@@ -40,7 +40,10 @@ not transcribed twice.
 The scheduler runs inside the app (one worker) and records each run in SQLite, so a restart or a deploy near the
 scheduled time never posts twice and still sends late, up to `DIGEST_CATCHUP_MINUTES`. Days are split into model
 calls of `DIGEST_BATCH_CHARS` characters (long group days are summarized in parts and merged), which keeps each
-call inside low rate-limit tiers. Preview a past day without sending anything:
+call inside low rate-limit tiers. `DIGEST_MODEL` picks a model for the 2 digests only (empty = the
+summarizer's model); on a free tier with a per-day token quota per model, a smaller model such as
+`openai/gpt-oss-20b` keeps the digests from eating the quota of the per-audio summaries, which always keep
+`OPENAI_SUMMARY_MODEL`. Preview a past day without sending anything:
 
 ```bash
 python -m app.digest group --date 2026-11-24   # as it would be posted at DIGEST_GROUP_TIME that day

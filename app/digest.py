@@ -624,7 +624,7 @@ class DigestRunner:
         self.audio_seconds = 0
         self._llm = llm or (lambda system, user: complete(
             settings, http, system, user, max_tokens=OUTPUT_TOKENS, usage=self.usage,
-            reasoning_effort=settings.digest_reasoning_effort))
+            reasoning_effort=settings.digest_reasoning_effort, model=settings.digest_model))
         same_instance = not settings.digest_owner_instance or settings.digest_owner_instance == settings.evolution_instance
         self.owner_jid = settings.owner_jid if same_instance else ""
 

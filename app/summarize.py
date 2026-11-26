@@ -163,9 +163,10 @@ def _retry_wait(resp: httpx.Response, attempt: int) -> float:
 
 async def complete(settings: Settings, client: httpx.AsyncClient, system: str, user: str,
                    *, max_tokens: int = 8192, usage: dict[str, int] | None = None,
-                   reasoning_effort: str = "") -> str:
+                   reasoning_effort: str = "", model: str = "") -> str:
     """One system + one user message → the model's raw text. Raises SummaryError on failure.
-    When `usage` is given, the call's input/output token counts are added to it."""
+    When `usage` is given, the call's input/output token counts are added to it. `model` overrides the
+    configured summarizer model for this call only (empty = the configured one)."""
     mode = settings.summarizer
     use_anthropic = mode == "anthropic" or (mode == "auto" and settings.anthropic_api_key)
     if not use_anthropic and not (settings.openai_api_key and settings.openai_summary_model):
@@ -178,11 +179,11 @@ async def complete(settings: Settings, client: httpx.AsyncClient, system: str, u
                     "https://api.anthropic.com/v1/messages",
                     headers={"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01",
                              "content-type": "application/json"},
-                    json={"model": settings.anthropic_model, "max_tokens": max(max_tokens, ANTHROPIC_MAX_TOKENS),
+                    json={"model": model or settings.anthropic_model, "max_tokens": max(max_tokens, ANTHROPIC_MAX_TOKENS),
                           "system": system, "messages": [{"role": "user", "content": user}]},
                 )
             else:
-                body: dict = {"model": settings.openai_summary_model, "max_completion_tokens": max_tokens,
+                body: dict = {"model": model or settings.openai_summary_model, "max_completion_tokens": max_tokens,
                               "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
                 if reasoning_effort:
                     body["reasoning_effort"] = reasoning_effort

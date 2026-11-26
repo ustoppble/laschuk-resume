@@ -606,3 +606,27 @@ def test_group_digest_fails_only_when_every_part_fails(monkeypatch):
     with pytest.raises(D.SummaryError):
         run(runner(FakeEvolution(records=records), llm, digest_batch_chars=4000).build_group(
             D.scheduled_at(date(2026, 11, 24), "18:00", TZ)))
+
+
+def test_digest_model_overrides_only_the_digest_calls(monkeypatch, tmp_path):
+    sent = []
+
+    def handler(req: httpx.Request):
+        sent.append(json.loads(req.content)["model"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]})
+
+    async def go(s):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            await complete(s, http, "sys", "user")  # plain call keeps the summarizer model
+            runner = D.DigestRunner(s, None, None, http, D.DigestStore(":memory:", 72))
+            await runner._llm("sys", "user")  # the digest call uses DIGEST_MODEL when set
+
+    base = settings()
+    run(go(settings(digest_model="openai/gpt-oss-20b")))
+    run(go(base))
+    assert sent == [base.openai_summary_model, "openai/gpt-oss-20b", base.openai_summary_model,
+                    base.openai_summary_model]
+    monkeypatch.setenv("DIGEST_MODEL", "openai/gpt-oss-20b")
+    assert load_settings(tmp_path / "none.env").digest_model == "openai/gpt-oss-20b"
+    monkeypatch.delenv("DIGEST_MODEL")
+    assert load_settings(tmp_path / "none.env").digest_model == ""

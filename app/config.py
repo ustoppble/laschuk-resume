@@ -98,6 +98,9 @@ class Settings:
     # days are split into several calls and merged.
     digest_batch_chars: int = 6000
     digest_reasoning_effort: str = ""  # OpenAI-compatible reasoning models only (e.g. "low"); empty = not sent
+    # Model for the 2 daily digests only; empty = the summarizer's model (OPENAI_SUMMARY_MODEL / ANTHROPIC_MODEL).
+    # Per-audio summaries always keep the summarizer's model.
+    digest_model: str = ""
 
     missing: tuple[str, ...] = field(default=())
 
@@ -207,5 +210,6 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         digest_retention_hours=max(1, _int("DIGEST_RETENTION_HOURS", defaults.digest_retention_hours)),
         digest_batch_chars=max(2000, _int("DIGEST_BATCH_CHARS", defaults.digest_batch_chars)),
         digest_reasoning_effort=_get("DIGEST_REASONING_EFFORT").lower(),
+        digest_model=_get("DIGEST_MODEL"),
         missing=missing,
     )
