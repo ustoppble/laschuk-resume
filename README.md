@@ -50,7 +50,11 @@ calls of `DIGEST_BATCH_CHARS` characters (long group days are summarized in part
 call inside low rate-limit tiers. `DIGEST_MODEL` picks a model for the 2 digests only (empty = the
 summarizer's model); on a free tier with a per-day token quota per model, a smaller model such as
 `openai/gpt-oss-20b` keeps the digests from eating the quota of the per-audio summaries, which always keep
-`OPENAI_SUMMARY_MODEL`. Preview a past day without sending anything:
+`OPENAI_SUMMARY_MODEL`. `DIGEST_PROVIDER=codex_cli` writes the 2 digests with the Codex CLI already logged in with a ChatGPT account
+(OAuth, `codex login --device-auth` once) instead of an API key, with `DIGEST_CLI_MODEL`. It runs as a plain text
+model: read-only sandbox, a throwaway empty directory, no user config or rules, no web search, the prompt on stdin,
+and a timeout (`DIGEST_CLI_TIMEOUT_SECONDS`); the CLI must be installed and logged in where the app runs. Preview a
+past day without sending anything:
 
 ```bash
 python -m app.digest group --date 2026-11-24   # as it would be posted at DIGEST_GROUP_TIME that day

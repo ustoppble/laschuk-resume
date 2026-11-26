@@ -38,6 +38,7 @@ from typing import Any, Awaitable, Callable
 
 import httpx
 
+from .agent_cli import cli_complete
 from .config import Settings
 from .parse import GROUP_FOOTER, _int, normalize_jid, unwrap_message
 from .summarize import SummaryError, complete
@@ -713,6 +714,8 @@ class DigestRunner:
         self.tz = get_tz(settings.digest_timezone)
         self.usage: dict[str, int] = {}
         self.audio_seconds = 0
+        if llm is None and settings.digest_provider:
+            llm = lambda system, user: cli_complete(settings, system, user, usage=self.usage)  # noqa: E731
         self._llm = llm or (lambda system, user: complete(
             settings, http, system, user, max_tokens=OUTPUT_TOKENS, usage=self.usage,
             reasoning_effort=settings.digest_reasoning_effort, model=settings.digest_model))
