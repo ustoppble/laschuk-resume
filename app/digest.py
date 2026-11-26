@@ -684,6 +684,23 @@ def poll_vote_from_message(message: dict[str, Any]) -> tuple[str, str, list[str]
     return poll_id, voter, options, ts
 
 
+def owner_first_name(profile_name: str) -> str:
+    """First word of the owner's WhatsApp profile name, as written (the same source as the owner filter)."""
+    for word in (profile_name or "").split():
+        clean = "".join(ch for ch in word if ch.isalpha())
+        if len(clean) >= 2:
+            return clean.capitalize() if clean.isupper() else clean  # "LASCHUK" → "Laschuk"
+    return ""
+
+
+def feedback_text(template: str, owner: str) -> str:
+    """The intern line before the poll. Without a name: "Sou o estagiário daqui"."""
+    t = " ".join((template or "").split())
+    if not owner:
+        t = t.replace("estagiário do {owner}", "estagiário daqui").replace(" do {owner}", " daqui")
+    return t.replace("{owner}", owner).strip()
+
+
 def poll_line(result: tuple[int, int]) -> str:
     return f"Resumo do grupo de ontem: {result[0]} SIM, {result[1]} NÃO"
 
@@ -1058,6 +1075,20 @@ class DigestRunner:
 
     # -- sending --
 
+    async def _add_feedback_text(self, digest: Digest) -> None:
+        """At the end of the highlights (before the footer), right before the poll: the bot introduces itself."""
+        try:
+            name = owner_first_name(await self.owner_evolution.fetch_profile_name())
+        except Exception:
+            name = ""
+        line = feedback_text(self.s.digest_group_feedback_text, name)
+        if not line:
+            return
+        for attr in ("text", "display"):
+            body = getattr(digest, attr)
+            head, sep, foot = body.rpartition(f"\n\n{GROUP_FOOTER}")
+            setattr(digest, attr, f"{head}\n\n{line}{sep}{foot}" if sep else f"{body}\n\n{line}")
+
     async def _send_feedback_poll(self, send_at: datetime) -> None:
         """The poll never blocks the digest: a failure is only logged."""
         try:
@@ -1074,6 +1105,8 @@ class DigestRunner:
         """Build and SEND one digest. Callers decide when (DigestScheduler) and claim the run first."""
         if job == JOB_GROUP:
             digest = await self.build_group(send_at)
+            if digest and self.s.digest_group_feedback_poll:
+                await self._add_feedback_text(digest)
             if digest:
                 await self.evolution.send_text(self.s.digest_group_jid, digest.text, mentioned=digest.mentioned)
                 if self.s.digest_group_feedback_poll:

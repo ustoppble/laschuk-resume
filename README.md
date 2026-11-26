@@ -35,7 +35,9 @@ not transcribed twice.
   It never says or hints that someone went unanswered: the prompt forbids it, and a draft that does is
   regenerated once, then the offending sentence is removed.
   Right after it (`DIGEST_GROUP_FEEDBACK_POLL=1`, the default) the bot posts a poll "Esse resumo foi útil?" with
-  SIM / NÃO and 1 vote per person (`/message/sendPoll`); no highlight, no digest and no poll. Votes come in through
+  SIM / NÃO and 1 vote per person (`/message/sendPoll`); no highlight, no digest and no poll. With the poll on, the
+  highlights end with a line in which the bot introduces itself as the owner's intern and asks for the vote
+  (`DIGEST_GROUP_FEEDBACK_TEXT`, `{owner}` = first name of the owner's WhatsApp profile, or "daqui" without one). Votes come in through
   the same `messages.upsert` webhook: Evolution v2 decrypts them itself (it needs the poll it sent, stored in its
   database) and sends the chosen option names; the last vote per person counts and an empty vote removes it. The
   next owner digest gets one line under its header: `Resumo do grupo de ontem: X SIM, Y NÃO`.

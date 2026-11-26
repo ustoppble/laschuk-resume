@@ -84,6 +84,9 @@ class Settings:
     digest_group_enabled: bool = False
     # Poll "Esse resumo foi útil?" (SIM / NÃO) right after the group digest; only when the group digest is on.
     digest_group_feedback_poll: bool = True
+    # Line before the poll; {owner} = the owner's first name (from the WhatsApp profile of the owner's number).
+    digest_group_feedback_text: str = ("Sou o estagiário do {owner} e estou aprendendo a fazer este resumo. "
+                                       "Seu voto na enquete aqui embaixo é muito importante pra eu melhorar.")
     digest_group_time: str = "08:00"
     digest_owner_enabled: bool = False
     digest_owner_time: str = "07:00"
@@ -207,6 +210,7 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         digest_group_jid=_get("DIGEST_GROUP_JID"),
         digest_group_enabled=_bool("DIGEST_GROUP_ENABLED", defaults.digest_group_enabled),
         digest_group_feedback_poll=_bool("DIGEST_GROUP_FEEDBACK_POLL", defaults.digest_group_feedback_poll),
+        digest_group_feedback_text=_get("DIGEST_GROUP_FEEDBACK_TEXT", defaults.digest_group_feedback_text),
         digest_group_time=_get("DIGEST_GROUP_TIME", defaults.digest_group_time),
         digest_owner_enabled=_bool("DIGEST_OWNER_ENABLED", defaults.digest_owner_enabled),
         digest_owner_time=_get("DIGEST_OWNER_TIME", defaults.digest_owner_time),

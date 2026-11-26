@@ -902,3 +902,27 @@ def test_evolution_send_poll_body():
     assert seen[0].url.path == "/message/sendPoll/inst"
     assert json.loads(seen[0].content) == {"number": GROUP, "name": "Esse resumo foi útil?", "selectableCount": 1,
                                            "values": ["SIM", "NÃO"]}
+
+
+
+def test_intern_line_goes_before_the_poll_with_the_owner_first_name_and_only_with_the_poll():
+    good = {"destaques": [{"titulo": "Deploy fica simples", "contexto": "@P1 perguntou.", "sacada": SACADA,
+                           "puxou": "P1", "tipo": "dica"}]}
+    send = D.scheduled_at(date(2026, 11, 25), "08:00", TZ)
+    evo = FakeEvolution(records=_group_records(), profile="Gui Dono")
+    dg = run(runner(evo, FakeLLM(good)).run_job(D.JOB_GROUP, send))
+    line = ("Sou o estagiário do Gui e estou aprendendo a fazer este resumo. Seu voto na enquete aqui embaixo é "
+            "muito importante pra eu melhorar.")
+    assert evo.sent[0]["text"].endswith(f"\n\n{line}\n\n{GROUP_FOOTER}") and line in dg.display
+    assert len(evo.polls) == 1  # the poll comes right after this message
+    off = FakeEvolution(records=_group_records())
+    run(runner(off, FakeLLM(good), digest_group_feedback_poll=False).run_job(D.JOB_GROUP, send))
+    assert "estagiário" not in off.sent[0]["text"] and off.polls == []
+    nameless = FakeEvolution(records=_group_records(), profile="")
+    run(runner(nameless, FakeLLM(good)).run_job(D.JOB_GROUP, send))
+    assert "Sou o estagiário daqui e estou aprendendo" in nameless.sent[0]["text"]
+    quiet = FakeEvolution(records=_group_records())
+    run(runner(quiet, FakeLLM({"destaques": []})).run_job(D.JOB_GROUP, send))
+    assert quiet.sent == [] and quiet.polls == []
+    assert D.feedback_text("Oi, sou do {owner}.", "Ana") == "Oi, sou do Ana."
+    assert D.owner_first_name("🚀 Gui Laschuk") == "Gui" and D.owner_first_name("LASCHUK IA") == "Laschuk"
