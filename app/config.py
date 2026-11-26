@@ -82,7 +82,7 @@ class Settings:
     # (1x1 chats, and in groups only what involves the owner), sent privately at DIGEST_OWNER_TIME.
     digest_group_jid: str = ""
     digest_group_enabled: bool = False
-    digest_group_time: str = "18:00"
+    digest_group_time: str = "08:00"
     digest_owner_enabled: bool = False
     digest_owner_time: str = "07:00"
     digest_owner_target_jid: str = ""  # empty = the owner's own chat (ownerJid of the instance)

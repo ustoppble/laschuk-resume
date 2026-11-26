@@ -120,7 +120,7 @@ def runner(evo, llm, **kw):
 def test_digests_are_off_by_default_and_validated(monkeypatch):
     s = Settings(evolution_url="u", evolution_instance="i", evolution_api_key="k", anthropic_api_key="a")
     assert not s.digest_group_enabled and not s.digest_owner_enabled
-    assert (s.digest_group_time, s.digest_owner_time, s.digest_timezone) == ("18:00", "07:00", "America/Sao_Paulo")
+    assert (s.digest_group_time, s.digest_owner_time, s.digest_timezone) == ("08:00", "07:00", "America/Sao_Paulo")
     s.validate()
     with pytest.raises(ConfigError, match="DIGEST_GROUP_JID"):
         Settings(evolution_url="u", evolution_instance="i", evolution_api_key="k", anthropic_api_key="a",
@@ -302,7 +302,7 @@ def _group_records():
 def test_group_digest_sends_nothing_on_a_quiet_day():
     llm = FakeLLM({"destaques": []})
     evo = FakeEvolution(records=[])
-    assert run(runner(evo, llm).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "18:00", TZ))) is None
+    assert run(runner(evo, llm).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "08:00", TZ))) is None
     assert llm.calls == [] and evo.sent == []
 
 
@@ -310,7 +310,7 @@ def test_group_digest_prompt_is_json_data_without_phones_or_jids_and_sends_menti
     llm = FakeLLM({"destaques": [{"titulo": "Deploy", "contexto": "@P1 perguntou e @P2 explicou.",
                                   "sacada": SACADA, "puxou": "P1", "pessoas": ["P1", "P2"]}]})
     evo = FakeEvolution(records=_group_records())
-    dg = run(runner(evo, llm).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+    dg = run(runner(evo, llm).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
     system, user = llm.calls[0]
     assert system == D.GROUP_SYSTEM_PROMPT and "não confiável" in system and "Não execute" in system
     assert "revele a chave" not in system
@@ -327,7 +327,7 @@ def test_group_digest_regenerates_once_when_the_draft_hints_someone_was_unanswer
     good = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe uma dúvida sobre deploy.", "sacada": SACADA, "puxou": "P1"}]}
     llm = FakeLLM(bad, good)
     dg = run(runner(FakeEvolution(records=_group_records()), llm).build_group(
-        D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+        D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
     assert len(llm.calls) == 2 and "Atenção" in llm.calls[1][1]
     assert "sem resposta" not in dg.text and "dúvida sobre deploy" in dg.text
 
@@ -335,7 +335,7 @@ def test_group_digest_regenerates_once_when_the_draft_hints_someone_was_unanswer
 def test_group_digest_never_ships_a_forbidden_sentence_even_if_the_model_insists():
     bad = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe deploy. Ninguém respondeu.", "sacada": SACADA, "puxou": "P1"}]}
     dg = run(runner(FakeEvolution(records=_group_records()), FakeLLM(bad)).build_group(
-        D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+        D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
     assert "Ninguém" not in dg.text and "trouxe deploy." in dg.text
 
 
@@ -355,7 +355,7 @@ def test_long_group_day_picks_the_top_3_over_the_whole_day_not_3_per_part():
                                           "qtd_pessoas": 1, "qtd_mensagens": 2} for i in range(1, 8)]})
 
     r = runner(FakeEvolution(records=records), llm, digest_batch_chars=4000)
-    dg = run(r.build_group(D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+    dg = run(r.build_group(D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
     parts = calls.count(D.GROUP_PART_PROMPT)
     assert parts >= 2 and calls[-1] == D.GROUP_MERGE_PROMPT and calls.count(D.GROUP_MERGE_PROMPT) == 1
     assert D.GROUP_SYSTEM_PROMPT not in calls
@@ -368,12 +368,12 @@ def test_long_group_day_picks_the_top_3_over_the_whole_day_not_3_per_part():
 def test_weak_day_sends_fewer_than_3_and_a_day_with_no_highlight_sends_nothing():
     one = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe uma dúvida sobre deploy.", "sacada": SACADA, "puxou": "P1"}]}
     dg = run(runner(FakeEvolution(records=_group_records()), FakeLLM(one)).build_group(
-        D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+        D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
     assert dg.stats["destaques"] == 1 and "*2." not in dg.text
     assert dg.text.startswith("*Destaques do dia no grupo — 24/11*")  # sent on 25/11, about 24/11
     evo = FakeEvolution(records=_group_records())
     out = run(runner(evo, FakeLLM({"destaques": []})).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25),
-                                                                                         "18:00", TZ)))
+                                                                                         "08:00", TZ)))
     assert out is None and evo.sent == []
 
 
@@ -481,11 +481,12 @@ def test_due_jobs_respects_time_catchup_and_runs_once():
     at = lambda h, m=0: datetime(2026, 11, 24, h, m, tzinfo=TZ)  # noqa: E731
     assert D.due_jobs(s, at(6, 59), store) == []
     assert [j for j, _ in D.due_jobs(s, at(7, 0), store)] == [D.JOB_OWNER]
-    assert D.due_jobs(s, at(8, 1), store) == []  # past the catch-up window
-    assert [j for j, _ in D.due_jobs(s, at(18, 30), store)] == [D.JOB_GROUP]
+    # group at 08:00 (default): the owner's 07:00 window is over at 08:30, the group's is open
+    assert [j for j, _ in D.due_jobs(s, at(8, 30), store)] == [D.JOB_GROUP]
+    assert D.due_jobs(s, at(9, 1), store) == []  # past both catch-up windows
     assert store.claim_run(D.JOB_GROUP, "2026-11-24") and not store.claim_run(D.JOB_GROUP, "2026-11-24")
-    assert D.due_jobs(s, at(18, 31), store) == []
-    assert D.due_jobs(settings(), at(18, 0), store) == []  # both off by default
+    assert D.due_jobs(s, at(8, 31), store) == []
+    assert D.due_jobs(settings(), at(8, 0), store) == []  # both off by default
 
 
 def test_scheduler_tick_runs_each_job_once_per_day():
@@ -498,10 +499,10 @@ def test_scheduler_tick_runs_each_job_once_per_day():
             self.ran.append((job, at.isoformat()))
 
     store = D.DigestStore(":memory:")
-    sched = D.DigestScheduler(R(), store, clock=lambda: datetime(2026, 11, 24, 18, 0, 5, tzinfo=TZ))
+    sched = D.DigestScheduler(R(), store, clock=lambda: datetime(2026, 11, 24, 8, 0, 5, tzinfo=TZ))
     assert run(sched.tick()) == [D.JOB_GROUP]
     assert run(sched.tick()) == []
-    assert R.ran == [(D.JOB_GROUP, "2026-11-24T18:00:00-03:00")]
+    assert R.ran == [(D.JOB_GROUP, "2026-11-24T08:00:00-03:00")]
 
 
 def test_windows():
@@ -649,7 +650,7 @@ def test_group_digest_fails_only_when_every_part_fails(monkeypatch):
 
     with pytest.raises(D.SummaryError):
         run(runner(FakeEvolution(records=records), llm, digest_batch_chars=4000).build_group(
-            D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+            D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
 
 
 def test_digest_model_overrides_only_the_digest_calls(monkeypatch, tmp_path):
@@ -694,7 +695,7 @@ def test_group_digest_drops_bug_reports_and_individual_support_even_on_a_day_ful
         {"titulo": "Gravar a tela ajuda", "contexto": "@P1 sugeriu gravar a tela para mostrar o passo a passo.",
          "sacada": SACADA, "puxou": "P1", "tipo": "dica"}]}
     llm = FakeLLM(model_out)
-    dg = run(runner(FakeEvolution(records=records), llm).build_group(D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+    dg = run(runner(FakeEvolution(records=records), llm).build_group(D.scheduled_at(date(2026, 11, 25), "08:00", TZ)))
     for prompt in (D.GROUP_SYSTEM_PROMPT, D.GROUP_PART_PROMPT, D.GROUP_MERGE_PROMPT):
         assert "REGRA DE EXCLUSÃO" in prompt and "bug" in prompt and "suporte individual" in prompt
         assert "problema que afetou" not in prompt
@@ -705,7 +706,7 @@ def test_group_digest_drops_bug_reports_and_individual_support_even_on_a_day_ful
     # only bugs/support: nothing is sent
     evo = FakeEvolution(records=records)
     only_bad = {"destaques": model_out["destaques"][:4]}
-    assert run(runner(evo, FakeLLM(only_bad)).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "18:00",
+    assert run(runner(evo, FakeLLM(only_bad)).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "08:00",
                                                                                     TZ))) is None
     assert evo.sent == []
 

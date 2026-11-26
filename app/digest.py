@@ -1,6 +1,6 @@
 """Daily digests (both OFF by default).
 
-* Group digest (DIGEST_GROUP_TIME, default 18:00): only the top 3 highlights of the previous day (00:00-24:00) of
+* Group digest (DIGEST_GROUP_TIME, default 08:00): only the top 3 highlights of the previous day (00:00-24:00) of
   DIGEST_GROUP_JID, posted in that group, each with a real @mention of who started it. It never says or hints that
   someone went unanswered.
 * Owner digest (DIGEST_OWNER_TIME, default 07:00): sent privately to the owner. It reads EVERY chat of the owner's

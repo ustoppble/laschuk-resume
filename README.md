@@ -22,7 +22,7 @@ and any past day can be previewed with the same code. Evolution must keep messag
 (`DIGEST_DB`, deleted after `DIGEST_RETENTION_HOURS`); the webhook pipeline fills that cache too, so an audio is
 not transcribed twice.
 
-- **Group digest** (`DIGEST_GROUP_ENABLED=1`, `DIGEST_GROUP_JID`, `DIGEST_GROUP_TIME=18:00`): only the **top 3
+- **Group digest** (`DIGEST_GROUP_ENABLED=1`, `DIGEST_GROUP_JID`, `DIGEST_GROUP_TIME=08:00`): only the **top 3
   highlights** of the previous day, 00:00 to 24:00, picked for the best insight for the group, not for the
   number of messages: decisions or announcements, news, launches or shared content, tips or lessons that serve
   everyone, and discussions of ideas, strategy or results. Product bug reports and individual support questions
