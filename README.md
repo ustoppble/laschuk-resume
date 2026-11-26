@@ -60,7 +60,13 @@ summarizer's model); on a free tier with a per-day token quota per model, a smal
 `OPENAI_SUMMARY_MODEL`. `DIGEST_PROVIDER=codex_cli` writes the 2 digests with the Codex CLI already logged in with a ChatGPT account
 (OAuth, `codex login --device-auth` once) instead of an API key, with `DIGEST_CLI_MODEL`. It runs as a plain text
 model: read-only sandbox, a throwaway empty directory, no user config or rules, no web search, the prompt on stdin,
-and a timeout (`DIGEST_CLI_TIMEOUT_SECONDS`); the CLI must be installed and logged in where the app runs. Preview a
+and a timeout (`DIGEST_CLI_TIMEOUT_SECONDS`); the CLI must be installed and logged in where the app runs. The Docker image already ships it (pinned) and
+`docker-compose.yml` mounts `./codex-home` (git-ignored, mode 700, owned by uid 1000) as the login volume, so the login
+survives rebuilds and deploys: `mkdir -m 700 codex-home && chown 1000:1000 codex-home`, then once
+`docker exec -it laschuk-resume codex login --device-auth`. If the CLI fails (not logged in, expired login, timeout) the
+digest is skipped with 1 error line in the log, or, with `DIGEST_FALLBACK=api`, written through the API path
+(`DIGEST_MODEL`, e.g. `openai/gpt-oss-120b` on Groq) for the rest of that run. A digest never raises into the audio
+pipeline: each run is isolated and failures are only logged. Preview a
 past day without sending anything:
 
 ```bash

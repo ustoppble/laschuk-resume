@@ -12,3 +12,4 @@ run.log
 qr.png
 docker-compose.override.yml
 docker-compose.*.local.yml
+codex-home/

@@ -807,13 +807,30 @@ class DigestRunner:
         self.tz = get_tz(settings.digest_timezone)
         self.usage: dict[str, int] = {}
         self.audio_seconds = 0
-        if llm is None and settings.digest_provider:
-            llm = lambda system, user: cli_complete(settings, system, user, usage=self.usage)  # noqa: E731
-        self._llm = llm or (lambda system, user: complete(
+        api_llm = lambda system, user: complete(  # noqa: E731
             settings, http, system, user, max_tokens=OUTPUT_TOKENS, usage=self.usage,
-            reasoning_effort=settings.digest_reasoning_effort, model=settings.digest_model))
+            reasoning_effort=settings.digest_reasoning_effort, model=settings.digest_model)
+        self._cli_down = False  # the agent CLI failed during this run: the rest of the run goes straight to the fallback
+        if llm is None and settings.digest_provider:
+            llm = self._cli_with_fallback(api_llm if settings.digest_fallback == "api" else None)
+        self._llm = llm or api_llm
         same_instance = not settings.digest_owner_instance or settings.digest_owner_instance == settings.evolution_instance
         self.owner_jid = settings.owner_jid if same_instance else ""
+
+    def _cli_with_fallback(self, fallback: Callable[[str, str], Awaitable[str]] | None):
+        async def call(system: str, user: str) -> str:
+            if not self._cli_down:
+                try:
+                    return await cli_complete(self.s, system, user, usage=self.usage)
+                except SummaryError as exc:
+                    if fallback is None:
+                        raise
+                    self._cli_down = True
+                    log.warning("digest: agent CLI failed (%s); using the API fallback for this run", str(exc)[:80])
+            if fallback is None:
+                raise SummaryError("agent CLI is not available")
+            return await fallback(system, user)
+        return call
 
     async def _owner(self) -> str:
         if not self.owner_jid:
@@ -1103,6 +1120,7 @@ class DigestRunner:
 
     async def run_job(self, job: str, send_at: datetime) -> Digest | None:
         """Build and SEND one digest. Callers decide when (DigestScheduler) and claim the run first."""
+        self._cli_down = False
         if job == JOB_GROUP:
             digest = await self.build_group(send_at)
             if digest and self.s.digest_group_feedback_poll:

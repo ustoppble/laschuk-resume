@@ -799,6 +799,37 @@ def test_group_digest_through_the_codex_cli_provider(tmp_path):
     assert dg.stats["destaques"] == 1 and "\nSacada: " in dg.text and r.usage["calls"] == 1
 
 
+def test_cli_failure_falls_back_to_the_api_path_only_when_configured(tmp_path, monkeypatch):
+    answer = {"destaques": [{"titulo": "Deploy fica mais simples com o botão", "contexto": "@P1 perguntou do deploy.",
+                             "sacada": SACADA, "puxou": "P1", "tipo": "dica"}]}
+    api_calls = []
+
+    async def fake_complete(settings, http, system, user, **kw):
+        api_calls.append(kw.get("model"))
+        return json.dumps(answer, ensure_ascii=False)
+
+    monkeypatch.setattr(D, "complete", fake_complete)
+    at = D.scheduled_at(date(2026, 11, 25), "08:00", TZ)
+    broken = dict(digest_provider="codex_cli", digest_cli_bin=str(tmp_path / "nope"), digest_model="m-120b")
+    # with the fallback: the digest still goes out, through the API model; the CLI is tried only once per run
+    r = runner(FakeEvolution(records=_group_records()), None, digest_fallback="api", **broken)
+    dg = run(r.build_group(at))
+    assert dg.stats["destaques"] == 1 and api_calls == ["m-120b"] and r._cli_down
+    # without it: the failure surfaces (the scheduler logs it and sends nothing)
+    r2 = runner(FakeEvolution(records=_group_records()), None, **broken)
+    with pytest.raises(D.SummaryError):
+        run(r2._llm("s", "u"))
+    assert api_calls == ["m-120b"]
+
+
+def test_digest_fallback_env_and_validation(monkeypatch, tmp_path):
+    monkeypatch.setenv("DIGEST_FALLBACK", "API")
+    assert load_settings(tmp_path / "none.env").digest_fallback == "api"
+    with pytest.raises(ConfigError, match="DIGEST_FALLBACK"):
+        Settings(evolution_url="u", evolution_instance="i", evolution_api_key="k", anthropic_api_key="a",
+                 digest_fallback="x").validate()
+
+
 def test_digest_provider_env_and_validation(monkeypatch, tmp_path):
     for k, v in {"DIGEST_PROVIDER": "CODEX_CLI", "DIGEST_CLI_MODEL": "gpt-x", "DIGEST_CLI_TIMEOUT_SECONDS": "5"}.items():
         monkeypatch.setenv(k, v)

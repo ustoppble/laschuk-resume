@@ -112,6 +112,9 @@ class Settings:
     digest_cli_model: str = ""  # e.g. gpt-6.2-astra; empty = the CLI's default
     digest_cli_bin: str = "codex"
     digest_cli_timeout_seconds: int = 300
+    # When the agent CLI fails (not logged in, expired login, timeout): "api" = write that digest through the API
+    # path (DIGEST_MODEL / the summarizer) instead of skipping the day. Empty = no fallback, the digest is skipped.
+    digest_fallback: str = ""
 
     missing: tuple[str, ...] = field(default=())
 
@@ -143,6 +146,8 @@ class Settings:
             problems.append("DIGEST_GROUP_JID must be a group JID (…@g.us) when DIGEST_GROUP_ENABLED=1")
         if self.digest_provider not in {"", "codex_cli"}:
             problems.append("DIGEST_PROVIDER must be empty (API) or codex_cli")
+        if self.digest_fallback not in {"", "api"}:
+            problems.append("DIGEST_FALLBACK must be empty or api")
         if self.digest_owner_scope not in {"all", "dm", "groups"}:
             problems.append("DIGEST_OWNER_SCOPE must be all, dm or groups")
         if self.digest_group_enabled or self.digest_owner_enabled:
@@ -230,5 +235,6 @@ def load_settings(env_file: str | os.PathLike | None = None) -> Settings:
         digest_cli_model=_get("DIGEST_CLI_MODEL"),
         digest_cli_bin=_get("DIGEST_CLI_BIN", defaults.digest_cli_bin),
         digest_cli_timeout_seconds=max(30, _int("DIGEST_CLI_TIMEOUT_SECONDS", defaults.digest_cli_timeout_seconds)),
+        digest_fallback=_get("DIGEST_FALLBACK").lower(),
         missing=missing,
     )
