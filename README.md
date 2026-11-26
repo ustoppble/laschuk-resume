@@ -22,11 +22,14 @@ and any past day can be previewed with the same code. Evolution must keep messag
 (`DIGEST_DB`, deleted after `DIGEST_RETENTION_HOURS`); the webhook pipeline fills that cache too, so an audio is
 not transcribed twice.
 
-- **Group digest** (`DIGEST_GROUP_ENABLED=1`, `DIGEST_GROUP_JID`, `DIGEST_GROUP_TIME=18:00`): the topics of the
-  24 hours before sending, posted in the group. Each topic gets a short title, 1–3 sentences and real WhatsApp
-  mentions (`@<number>` in the text + Evolution's `mentioned` field) of who brought it up or took part. It never
-  says or hints that someone went unanswered: the prompt forbids it, and a draft that does is regenerated once,
-  then the offending sentence is removed. A day without conversation sends nothing.
+- **Group digest** (`DIGEST_GROUP_ENABLED=1`, `DIGEST_GROUP_JID`, `DIGEST_GROUP_TIME=18:00`): only the **top 3
+  highlights** of the previous day, 00:00 to 24:00 (decisions, announcements, problems that hit several people, useful
+  tips or fixes, conversations with many people), most important first; small talk, greetings and one-message
+  topics are left out, and a weak day gets fewer than 3 instead of filler. Each highlight is a 1-line title plus 1–2
+  lines of context with a real WhatsApp mention (`@<number>` in the text + Evolution's `mentioned` field) of who
+  started it. On a long day each part proposes candidates and one final call picks the top 3 of the whole day. It
+  never says or hints that someone went unanswered: the prompt forbids it, and a draft that does is regenerated
+  once, then the offending sentence is removed. A day without conversation (or without a highlight) sends nothing.
 - **Owner digest** (`DIGEST_OWNER_ENABLED=1`, `DIGEST_OWNER_TIME=07:00`): sent privately (`DIGEST_OWNER_TARGET_JID`,
   default the owner's own chat). It reads every chat of the owner's number (`DIGEST_OWNER_INSTANCE`) that had
   activity the day before and lists what is pending for the owner: unanswered messages or audios, questions,

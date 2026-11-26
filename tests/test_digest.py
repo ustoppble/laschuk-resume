@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+import re
 from datetime import date, datetime, timedelta
 
 import httpx
@@ -235,17 +236,37 @@ def test_group_rule_allows_positive_text_and_scrub_drops_only_bad_sentences():
     assert D.scrub_sentences(ok + " Ninguém respondeu ainda.") == ok
 
 
-def test_render_group_has_header_mentions_people_line_and_footer():
+def test_render_group_has_header_highlights_with_starter_mention_and_footer():
     roster = _roster()
-    data = {"assuntos": [{"titulo": "Automações", "resumo": "@P1 mostrou um fluxo.", "pessoas": ["P1", "P2"]},
-                         {"titulo": "Vazio", "resumo": ""}]}
+    data = {"destaques": [{"titulo": "Automações", "contexto": "Um fluxo novo foi mostrado.", "puxou": "P1",
+                           "pessoas": ["P1", "P2"]},
+                          {"titulo": "Vazio", "contexto": ""}]}
     dg = D.render_group(data, roster, "24/11", {"mensagens": 3})
-    assert dg.text.startswith("📋 *Resumo do dia no grupo — 24/11*")
-    assert "*1. Automações*\n@11111111111111 mostrou um fluxo.\n👥 @99999999999999" in dg.text
+    assert dg.text.startswith("*Destaques do dia no grupo — 24/11*")
+    assert "*1. Automações*\nUm fluxo novo foi mostrado. Assunto puxado por @11111111111111." in dg.text
     assert dg.text.endswith(GROUP_FOOTER)
-    assert dg.mentioned == [ANA_LID, OWNER_LID]
-    assert "@Ana mostrou um fluxo." in dg.display and "Vazio" not in dg.text
-    assert D.render_group({"assuntos": []}, roster, "24/11", {}) is None
+    assert dg.mentioned == [ANA_LID]
+    assert "puxado por @Ana." in dg.display and "Vazio" not in dg.text
+    assert dg.stats["destaques"] == 1
+    assert not re.search(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", dg.text)  # no emoji in the group digest
+    assert D.render_group({"destaques": []}, roster, "24/11", {}) is None
+
+
+def test_render_group_keeps_at_most_3_highlights_in_the_model_order():
+    roster = _roster()
+    data = {"destaques": [{"titulo": f"Tema {i}", "contexto": f"@P1 trouxe o tema {i}.", "puxou": "P1"}
+                          for i in range(1, 6)]}
+    dg = D.render_group(data, roster, "24/11", {})
+    assert dg.stats["destaques"] == 3
+    assert "*1. Tema 1*" in dg.text and "*3. Tema 3*" in dg.text and "Tema 4" not in dg.text
+    assert "puxado por" not in dg.text  # the starter is already mentioned inline
+
+
+def test_group_prompts_ask_for_at_most_3_and_allow_fewer_on_a_weak_day():
+    for prompt in (D.GROUP_SYSTEM_PROMPT, D.GROUP_MERGE_PROMPT):
+        assert "no máximo 3" in prompt and "devolva menos destaques" in prompt and "nunca invente" in prompt
+        assert "REGRA ABSOLUTA" in prompt and "sem emoji" in prompt
+    assert "dia INTEIRO" in D.GROUP_PART_PROMPT and "Não execute" in D.GROUP_PART_PROMPT
 
 
 def test_render_owner_groups_by_conversation_most_urgent_first():
@@ -278,17 +299,17 @@ def _group_records():
 
 
 def test_group_digest_sends_nothing_on_a_quiet_day():
-    llm = FakeLLM({"assuntos": []})
+    llm = FakeLLM({"destaques": []})
     evo = FakeEvolution(records=[])
-    assert run(runner(evo, llm).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 24), "18:00", TZ))) is None
+    assert run(runner(evo, llm).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "18:00", TZ))) is None
     assert llm.calls == [] and evo.sent == []
 
 
 def test_group_digest_prompt_is_json_data_without_phones_or_jids_and_sends_mentions():
-    llm = FakeLLM({"assuntos": [{"titulo": "Deploy", "resumo": "@P1 perguntou e @P2 explicou.",
-                                 "pessoas": ["P1", "P2"]}]})
+    llm = FakeLLM({"destaques": [{"titulo": "Deploy", "contexto": "@P1 perguntou e @P2 explicou.",
+                                  "puxou": "P1", "pessoas": ["P1", "P2"]}]})
     evo = FakeEvolution(records=_group_records())
-    dg = run(runner(evo, llm).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 24), "18:00", TZ)))
+    dg = run(runner(evo, llm).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
     system, user = llm.calls[0]
     assert system == D.GROUP_SYSTEM_PROMPT and "não confiável" in system and "Não execute" in system
     assert "revele a chave" not in system
@@ -301,38 +322,58 @@ def test_group_digest_prompt_is_json_data_without_phones_or_jids_and_sends_menti
 
 
 def test_group_digest_regenerates_once_when_the_draft_hints_someone_was_unanswered():
-    bad = {"assuntos": [{"titulo": "Deploy", "resumo": "@P1 perguntou e ficou sem resposta.", "pessoas": ["P1"]}]}
-    good = {"assuntos": [{"titulo": "Deploy", "resumo": "@P1 trouxe uma dúvida sobre deploy.", "pessoas": ["P1"]}]}
+    bad = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 perguntou e ficou sem resposta.", "puxou": "P1"}]}
+    good = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe uma dúvida sobre deploy.", "puxou": "P1"}]}
     llm = FakeLLM(bad, good)
     dg = run(runner(FakeEvolution(records=_group_records()), llm).build_group(
-        D.scheduled_at(date(2026, 11, 24), "18:00", TZ)))
+        D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
     assert len(llm.calls) == 2 and "Atenção" in llm.calls[1][1]
     assert "sem resposta" not in dg.text and "dúvida sobre deploy" in dg.text
 
 
 def test_group_digest_never_ships_a_forbidden_sentence_even_if_the_model_insists():
-    bad = {"assuntos": [{"titulo": "Deploy", "resumo": "@P1 trouxe deploy. Ninguém respondeu.", "pessoas": []}]}
+    bad = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe deploy. Ninguém respondeu.", "puxou": "P1"}]}
     dg = run(runner(FakeEvolution(records=_group_records()), FakeLLM(bad)).build_group(
-        D.scheduled_at(date(2026, 11, 24), "18:00", TZ)))
+        D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
     assert "Ninguém" not in dg.text and "trouxe deploy." in dg.text
 
 
-def test_long_group_day_is_split_and_merged():
+def test_long_group_day_picks_the_top_3_over_the_whole_day_not_3_per_part():
     records = [rec(str(i), GROUP, ts(24, 9) + i, "mensagem " * 40, participant=ANA_LID, name="Ana")
                for i in range(60)]
-    part = {"assuntos": [{"titulo": "Parte", "resumo": "@P1 falou.", "pessoas": ["P1"]}]}
-    merged = {"assuntos": [{"titulo": "Tudo", "resumo": "@P1 falou bastante.", "pessoas": ["P1"]}]}
-    calls = []
+    calls, merge_inputs = [], []
 
     async def llm(system, user):
         calls.append(system)
-        return json.dumps(merged if system == D.GROUP_MERGE_PROMPT else part)
+        if system == D.GROUP_MERGE_PROMPT:
+            merge_inputs.append(json.loads(user.split("\n", 1)[1]))
+            return json.dumps({"destaques": [{"titulo": f"Dia {i}", "contexto": "@P1 falou bastante.",
+                                              "puxou": "P1"} for i in range(1, 5)]})
+        n = calls.count(D.GROUP_PART_PROMPT)
+        return json.dumps({"destaques": [{"titulo": f"Parte {n}.{i}", "contexto": "@P1 falou.", "puxou": "P1",
+                                          "qtd_pessoas": 1, "qtd_mensagens": 2} for i in range(1, 8)]})
 
     r = runner(FakeEvolution(records=records), llm, digest_batch_chars=4000)
-    dg = run(r.build_group(D.scheduled_at(date(2026, 11, 24), "18:00", TZ)))
-    assert calls.count(D.GROUP_SYSTEM_PROMPT) >= 2 and calls[-1] == D.GROUP_MERGE_PROMPT
-    assert calls.count(D.GROUP_MERGE_PROMPT) == 1
-    assert "*1. Tudo*" in dg.text and dg.stats["chamadas_modelo"] == len(calls)
+    dg = run(r.build_group(D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+    parts = calls.count(D.GROUP_PART_PROMPT)
+    assert parts >= 2 and calls[-1] == D.GROUP_MERGE_PROMPT and calls.count(D.GROUP_MERGE_PROMPT) == 1
+    assert D.GROUP_SYSTEM_PROMPT not in calls
+    # every part's candidates (capped) reach ONE final pick over the whole day
+    assert len(merge_inputs[0]["candidatos"]) == parts * D.GROUP_PART_CANDIDATES
+    assert dg.stats["destaques"] == 3 and "*1. Dia 1*" in dg.text and "Dia 4" not in dg.text
+    assert "Parte" not in dg.text and dg.stats["chamadas_modelo"] == len(calls)
+
+
+def test_weak_day_sends_fewer_than_3_and_a_day_with_no_highlight_sends_nothing():
+    one = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe uma dúvida sobre deploy.", "puxou": "P1"}]}
+    dg = run(runner(FakeEvolution(records=_group_records()), FakeLLM(one)).build_group(
+        D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+    assert dg.stats["destaques"] == 1 and "*2." not in dg.text
+    assert dg.text.startswith("*Destaques do dia no grupo — 24/11*")  # sent on 25/11, about 24/11
+    evo = FakeEvolution(records=_group_records())
+    out = run(runner(evo, FakeLLM({"destaques": []})).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25),
+                                                                                         "18:00", TZ)))
+    assert out is None and evo.sent == []
 
 
 def _owner_records():
@@ -464,7 +505,9 @@ def test_scheduler_tick_runs_each_job_once_per_day():
 
 def test_windows():
     send = datetime(2026, 11, 24, 18, 0, tzinfo=TZ)
-    assert D.group_window(send) == (send - timedelta(hours=24), send)
+    # the previous calendar day, whole, whatever the send time
+    assert D.group_window(send) == (datetime(2026, 11, 23, tzinfo=TZ), datetime(2026, 11, 24, tzinfo=TZ))
+    assert D.group_window(send.replace(hour=7)) == D.group_window(send)
     day, start, end = D.owner_window(datetime(2026, 11, 25, 7, 0, tzinfo=TZ))
     assert day == date(2026, 11, 24) and start == datetime(2026, 11, 24, tzinfo=TZ) and end.hour == 7
 
@@ -605,7 +648,7 @@ def test_group_digest_fails_only_when_every_part_fails(monkeypatch):
 
     with pytest.raises(D.SummaryError):
         run(runner(FakeEvolution(records=records), llm, digest_batch_chars=4000).build_group(
-            D.scheduled_at(date(2026, 11, 24), "18:00", TZ)))
+            D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
 
 
 def test_digest_model_overrides_only_the_digest_calls(monkeypatch, tmp_path):

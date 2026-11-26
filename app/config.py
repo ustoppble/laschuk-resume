@@ -77,7 +77,7 @@ class Settings:
     dedupe_db: str = str(ROOT / "data" / "seen.sqlite3")
 
     # Daily digests (app/digest.py). Both are OFF by default.
-    # Group digest: topics of the last 24h posted in DIGEST_GROUP_JID at DIGEST_GROUP_TIME, with @mentions.
+    # Group digest: the top 3 highlights of the previous day, posted in DIGEST_GROUP_JID at DIGEST_GROUP_TIME.
     # Owner digest: what was left pending for the owner the day before, across ALL chats of the owner's number
     # (1x1 chats, and in groups only what involves the owner), sent privately at DIGEST_OWNER_TIME.
     digest_group_jid: str = ""
