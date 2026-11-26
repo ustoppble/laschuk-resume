@@ -373,16 +373,32 @@ _NO_UNANSWERED = (
 )
 
 _HIGHLIGHT_CRITERIA = (
-    "Um destaque é o que mais importou para quem é do grupo: uma decisão, um anúncio, um problema que afetou várias "
-    "pessoas, uma dica ou solução útil, ou uma conversa com várias pessoas envolvidas. Fica de fora: conversa solta, "
-    "cumprimento, agradecimento, risada, figurinha e assunto de uma mensagem só, sem resposta nem reação de mais "
-    "ninguém. Se o dia teve menos coisas importantes, devolva menos destaques; nunca invente nem complete a lista. "
+    "Um destaque é o que vale para o GRUPO INTEIRO: uma decisão ou um anúncio; uma novidade, um lançamento ou um "
+    "conteúdo compartilhado; uma dica ou aprendizado que serve para todo mundo; uma discussão de ideia, estratégia "
+    "ou resultado com várias pessoas. Fica de fora: conversa solta, cumprimento, agradecimento, risada, figurinha e "
+    "assunto de uma mensagem só, sem resposta nem reação de mais ninguém. "
+    "REGRA DE EXCLUSÃO (vale mesmo que muita gente tenha falado do assunto): NUNCA vira destaque e não aparece em "
+    "nenhuma parte do texto (título, contexto ou de passagem) (1) relato de bug, erro, falha, travamento, problema "
+    "ou reclamação do produto e (2) dúvida de suporte individual: limite ou cota de uma ferramenta, configuração, "
+    "instalação, erro de ambiente ou 'como faço X' que só interessa a quem perguntou. Simplesmente ignore essas "
+    "mensagens. "
+    "Se o dia teve menos coisas importantes, devolva menos destaques; nunca invente nem complete a lista. "
 )
 
 _HIGHLIGHT_FORMAT = (
-    "Para cada destaque: 'titulo' em 1 linha curta; 'contexto' em 1 ou 2 frases curtas dizendo o que aconteceu e "
-    "por que importa, citando com @P<número> quem puxou o assunto; 'puxou' com o identificador de quem puxou "
-    "(ex.: \"P3\"); 'pessoas' com os identificadores de quem participou. "
+    "Você não é um relator: é alguém que entende do assunto e tem sacadas sobre o que foi conversado. Escolha os "
+    "destaques pela MELHOR SACADA para o grupo, não pelo número de mensagens. Para cada destaque: 'titulo' em 1 "
+    "linha curta que já diga o ponto (a conclusão ou a ideia), não só o nome do assunto; 'contexto' em 1 frase "
+    "curta com o que rolou, citando com @P<número> quem puxou o assunto; 'sacada' em 1 ou 2 frases com a leitura "
+    "de quem entende do assunto: por que isso importa, o que dá para aprender ou aplicar, o padrão por trás, a "
+    "consequência prática ou o próximo passo que faz sentido para quem é do grupo. A sacada sai do que foi "
+    "conversado: não invente fato, número nem promessa. Nada de frase genérica de coach (ex.: 'isso mostra a "
+    "importância de...', 'é fundamental...'): tem que ser algo específico que alguém do grupo leria e pensaria "
+    "'boa'. Se não houver sacada boa, o assunto NÃO é destaque. "
+    "Além disso: 'puxou' com o identificador de quem puxou "
+    "(ex.: \"P3\"); 'pessoas' com os identificadores de quem participou; 'tipo' com um destes valores: "
+    "'decisao', 'anuncio', 'novidade', 'conteudo', 'dica', 'discussao' ou, se mesmo assim for relato de bug ou "
+    "problema, 'bug', e se for dúvida de suporte individual, 'suporte' (os 2 últimos são descartados). "
 )
 
 GROUP_SYSTEM_PROMPT = (
@@ -392,7 +408,7 @@ GROUP_SYSTEM_PROMPT = (
     "espalhadas no dia. " + _HIGHLIGHT_CRITERIA + _HIGHLIGHT_FORMAT + _NO_UNANSWERED +
     "Tom positivo e útil para quem não acompanhou o dia. " + _COMMON_RULES + _INJECTION_RULES +
     "Responda SOMENTE com um objeto JSON, sem texto antes ou depois, no formato "
-    '{"destaques": [{"titulo": "...", "contexto": "...", "puxou": "P1", "pessoas": ["P1", "P2"]}]}. '
+    '{"destaques": [{"titulo": "...", "contexto": "...", "sacada": "...", "puxou": "P1", "pessoas": ["P1", "P2"], "tipo": "dica"}]}. '
     'Se nada importante aconteceu, responda {"destaques": []}.'
 )
 
@@ -404,7 +420,7 @@ GROUP_PART_PROMPT = (
     "Em cada candidato, informe também 'qtd_pessoas' (quantas pessoas falaram do tema) e 'qtd_mensagens' (quantas "
     "mensagens trataram dele), contando nesta parte. " + _NO_UNANSWERED + _COMMON_RULES + _INJECTION_RULES +
     "Responda SOMENTE com um objeto JSON, sem texto antes ou depois, no formato "
-    '{"destaques": [{"titulo": "...", "contexto": "...", "puxou": "P1", "pessoas": ["P1", "P2"], '
+    '{"destaques": [{"titulo": "...", "contexto": "...", "sacada": "...", "puxou": "P1", "pessoas": ["P1", "P2"], "tipo": "dica", '
     '"qtd_pessoas": 2, "qtd_mensagens": 5}]}. Se nada importante aconteceu nesta parte, responda {"destaques": []}.'
 )
 
@@ -419,7 +435,7 @@ GROUP_MERGE_PROMPT = (
     "*negrito*. Preserve nomes de produtos, datas, valores e horários exatamente como escritos. Não invente nada. "
     "Use SOMENTE os identificadores @P<número> que aparecem nos candidatos. "
     "Responda SOMENTE com um objeto JSON no formato "
-    '{"destaques": [{"titulo": "...", "contexto": "...", "puxou": "P1", "pessoas": ["P1", "P2"]}]}. '
+    '{"destaques": [{"titulo": "...", "contexto": "...", "sacada": "...", "puxou": "P1", "pessoas": ["P1", "P2"], "tipo": "dica"}]}. '
     'Se nenhum candidato for importante, responda {"destaques": []}.'
 )
 
@@ -494,8 +510,46 @@ class Digest:
     stats: dict[str, int]
 
 
+# Product bug reports and individual support questions never reach the group digest (the owner's private digest
+# still lists bugs). The prompts exclude them; this is the safety net: a highlight the model typed as one of them,
+# or whose text reads like one, is dropped (a lost highlight is better than a bug or support case in the group).
+_EXCLUDED_TYPES = {"bug", "erro", "problema", "falha", "reclamacao", "reclamação", "suporte", "duvida", "dúvida"}
+_SUPPORT_CASE = re.compile(
+    r"\blimites? de (?:uso|requisi|tokens?|mensagens?)|\bcotas?\b|\bssh\b|\bconfigur(?:ar|ação|acao|ações|ou)\b|"
+    r"\binstal(?:ar|ação|acao|ou|ando)\b|\bn[aã]o consig|\bcomo (?:eu )?fa[çz]o\b|\bvari[aá]veis? de ambiente\b",
+    re.IGNORECASE,
+)
+_BUG_REPORT = re.compile(
+    r"\bbugs?\b|\berros?\b|\bfalh(?:a|as|ou|aram|ando)\b|\btrav(?:a|ou|aram|ando|amento|amentos|ado)\b|"
+    r"\bcrash|\bquebr(?:ou|ado|ada|aram)\b|n[aã]o (?:est[aá] |esta )?funciona|parou de funcionar|"
+    r"\bproblemas?\b|\breclama(?:ção|cao|ções|coes|ram|ou|ndo|r)?\b|\binst[aá]vel\b|\bfora do ar\b",
+    re.IGNORECASE,
+)
+
+
+def is_bug_highlight(item: dict[str, Any]) -> bool:
+    kind = str(item.get("tipo") or "").strip().casefold()
+    text = f"{item.get('titulo', '')} {item.get('contexto', '')}"
+    text += f" {item.get('sacada', '')}"
+    return kind in _EXCLUDED_TYPES or bool(_BUG_REPORT.search(text) or _SUPPORT_CASE.search(text))
+
+
+# A highlight without a real insight is not a highlight: empty or generic "coach" insights are dropped.
+_GENERIC_INSIGHT = re.compile(
+    r"mostra(?:m)? a import[aâ]ncia|reforça(?:m)? a import[aâ]ncia|destaca(?:m)? a import[aâ]ncia|"
+    r"[ée] (?:fundamental|essencial|crucial|important[ií]ssimo)|a import[aâ]ncia de|nunca subestime|"
+    r"faz toda a diferen[cç]a|o segredo [ée]|lembrete de que",
+    re.IGNORECASE,
+)
+
+
+def good_insight(text: str) -> bool:
+    t = " ".join((text or "").split())
+    return len(t) >= 20 and not _GENERIC_INSIGHT.search(t)
+
+
 def _highlights(data: dict[str, Any]) -> list[dict[str, Any]]:
-    return [t for t in data.get("destaques") or [] if isinstance(t, dict)]
+    return [t for t in data.get("destaques") or [] if isinstance(t, dict) and not is_bug_highlight(t)]
 
 
 def render_group(data: dict[str, Any], roster: Roster, day_label: str, stats: dict[str, int]) -> Digest | None:
@@ -506,15 +560,17 @@ def render_group(data: dict[str, Any], roster: Roster, day_label: str, stats: di
             break
         title = scrub_sentences(" ".join(str(item.get("titulo") or "").split()))
         context = scrub_sentences(" ".join(str(item.get("contexto") or "").split()))
-        if not title or not context:
+        insight = scrub_sentences(" ".join(str(item.get("sacada") or "").split()))
+        if not title or not context or not good_insight(insight):
             continue
         starter = str(item.get("puxou") or "").strip().lstrip("@")
         if starter in roster.people and starter not in {f"P{m.group(1)}" for m in _HANDLE.finditer(context)}:
             context = context.rstrip() + f" Assunto puxado por @{starter}."
         n = len(blocks_wa) + 1
-        blocks_wa.append(f"*{n}. {render_mentions(title, roster, mentioned)}*\n{render_mentions(context, roster, mentioned)}")
+        blocks_wa.append(f"*{n}. {render_mentions(title, roster, mentioned)}*\n{render_mentions(context, roster, mentioned)}"
+                         f"\nSacada: {render_mentions(insight, roster, mentioned)}")
         blocks_view.append(f"*{n}. {render_mentions(title, roster, [], True)}*\n"
-                           f"{render_mentions(context, roster, [], True)}")
+                           f"{render_mentions(context, roster, [], True)}\nSacada: {render_mentions(insight, roster, [], True)}")
     if not blocks_wa:
         return None
     header = f"*Destaques do dia no grupo — {day_label}*"
@@ -793,7 +849,8 @@ class DigestRunner:
             # the final pick is made over the whole day, never top-3 per part
             system, payload = GROUP_MERGE_PROMPT, {"participantes": _people(roster), "candidatos": partial}
         data = await self._ask(system, payload)
-        if any(violates_group_rule(f"{t.get('titulo', '')} {t.get('contexto', '')}") for t in _highlights(data)):
+        if any(violates_group_rule(f"{t.get('titulo', '')} {t.get('contexto', '')} {t.get('sacada', '')}")
+               for t in _highlights(data)):
             log.warning("digest: group draft mentioned unanswered messages; regenerating once")
             stats["chamadas_modelo"] += 1
             data = await self._ask(system, payload, note=note)

@@ -15,6 +15,7 @@ from app.parse import GROUP_FOOTER
 from app.summarize import complete
 
 TZ = D.get_tz("America/Sao_Paulo")
+SACADA = "Quem repetir o mesmo fluxo ganha tempo na próxima entrega da semana."
 GROUP = "120363000000000009@g.us"
 OTHER_GROUP = "120363000000000010@g.us"
 AUDIOS_GROUP = "120363000000000011@g.us"
@@ -238,7 +239,7 @@ def test_group_rule_allows_positive_text_and_scrub_drops_only_bad_sentences():
 
 def test_render_group_has_header_highlights_with_starter_mention_and_footer():
     roster = _roster()
-    data = {"destaques": [{"titulo": "Automações", "contexto": "Um fluxo novo foi mostrado.", "puxou": "P1",
+    data = {"destaques": [{"titulo": "Automações", "contexto": "Um fluxo novo foi mostrado.", "sacada": SACADA, "puxou": "P1",
                            "pessoas": ["P1", "P2"]},
                           {"titulo": "Vazio", "contexto": ""}]}
     dg = D.render_group(data, roster, "24/11", {"mensagens": 3})
@@ -254,7 +255,7 @@ def test_render_group_has_header_highlights_with_starter_mention_and_footer():
 
 def test_render_group_keeps_at_most_3_highlights_in_the_model_order():
     roster = _roster()
-    data = {"destaques": [{"titulo": f"Tema {i}", "contexto": f"@P1 trouxe o tema {i}.", "puxou": "P1"}
+    data = {"destaques": [{"titulo": f"Tema {i}", "contexto": f"@P1 trouxe o tema {i}.", "sacada": SACADA, "puxou": "P1"}
                           for i in range(1, 6)]}
     dg = D.render_group(data, roster, "24/11", {})
     assert dg.stats["destaques"] == 3
@@ -307,7 +308,7 @@ def test_group_digest_sends_nothing_on_a_quiet_day():
 
 def test_group_digest_prompt_is_json_data_without_phones_or_jids_and_sends_mentions():
     llm = FakeLLM({"destaques": [{"titulo": "Deploy", "contexto": "@P1 perguntou e @P2 explicou.",
-                                  "puxou": "P1", "pessoas": ["P1", "P2"]}]})
+                                  "sacada": SACADA, "puxou": "P1", "pessoas": ["P1", "P2"]}]})
     evo = FakeEvolution(records=_group_records())
     dg = run(runner(evo, llm).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
     system, user = llm.calls[0]
@@ -322,8 +323,8 @@ def test_group_digest_prompt_is_json_data_without_phones_or_jids_and_sends_menti
 
 
 def test_group_digest_regenerates_once_when_the_draft_hints_someone_was_unanswered():
-    bad = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 perguntou e ficou sem resposta.", "puxou": "P1"}]}
-    good = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe uma dúvida sobre deploy.", "puxou": "P1"}]}
+    bad = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 perguntou e ficou sem resposta.", "sacada": SACADA, "puxou": "P1"}]}
+    good = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe uma dúvida sobre deploy.", "sacada": SACADA, "puxou": "P1"}]}
     llm = FakeLLM(bad, good)
     dg = run(runner(FakeEvolution(records=_group_records()), llm).build_group(
         D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
@@ -332,7 +333,7 @@ def test_group_digest_regenerates_once_when_the_draft_hints_someone_was_unanswer
 
 
 def test_group_digest_never_ships_a_forbidden_sentence_even_if_the_model_insists():
-    bad = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe deploy. Ninguém respondeu.", "puxou": "P1"}]}
+    bad = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe deploy. Ninguém respondeu.", "sacada": SACADA, "puxou": "P1"}]}
     dg = run(runner(FakeEvolution(records=_group_records()), FakeLLM(bad)).build_group(
         D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
     assert "Ninguém" not in dg.text and "trouxe deploy." in dg.text
@@ -348,9 +349,9 @@ def test_long_group_day_picks_the_top_3_over_the_whole_day_not_3_per_part():
         if system == D.GROUP_MERGE_PROMPT:
             merge_inputs.append(json.loads(user.split("\n", 1)[1]))
             return json.dumps({"destaques": [{"titulo": f"Dia {i}", "contexto": "@P1 falou bastante.",
-                                              "puxou": "P1"} for i in range(1, 5)]})
+                                              "sacada": SACADA, "puxou": "P1"} for i in range(1, 5)]})
         n = calls.count(D.GROUP_PART_PROMPT)
-        return json.dumps({"destaques": [{"titulo": f"Parte {n}.{i}", "contexto": "@P1 falou.", "puxou": "P1",
+        return json.dumps({"destaques": [{"titulo": f"Parte {n}.{i}", "contexto": "@P1 falou.", "sacada": SACADA, "puxou": "P1",
                                           "qtd_pessoas": 1, "qtd_mensagens": 2} for i in range(1, 8)]})
 
     r = runner(FakeEvolution(records=records), llm, digest_batch_chars=4000)
@@ -365,7 +366,7 @@ def test_long_group_day_picks_the_top_3_over_the_whole_day_not_3_per_part():
 
 
 def test_weak_day_sends_fewer_than_3_and_a_day_with_no_highlight_sends_nothing():
-    one = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe uma dúvida sobre deploy.", "puxou": "P1"}]}
+    one = {"destaques": [{"titulo": "Deploy", "contexto": "@P1 trouxe uma dúvida sobre deploy.", "sacada": SACADA, "puxou": "P1"}]}
     dg = run(runner(FakeEvolution(records=_group_records()), FakeLLM(one)).build_group(
         D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
     assert dg.stats["destaques"] == 1 and "*2." not in dg.text
@@ -673,3 +674,60 @@ def test_digest_model_overrides_only_the_digest_calls(monkeypatch, tmp_path):
     assert load_settings(tmp_path / "none.env").digest_model == "openai/gpt-oss-20b"
     monkeypatch.delenv("DIGEST_MODEL")
     assert load_settings(tmp_path / "none.env").digest_model == ""
+
+
+def test_group_digest_drops_bug_reports_and_individual_support_even_on_a_day_full_of_them():
+    bugs = ["o app travou de novo", "deu erro ao salvar", "tá dando bug no login", "caiu tudo aqui também",
+            "o meu limite de uso da ferramenta acabou", "não consigo configurar o ssh no windows"]
+    records = [rec(str(i), GROUP, ts(24, 9, i), text, participant=ANA_LID if i % 2 else BRUNO_LID,
+                   name="Ana" if i % 2 else "Bruno") for i, text in enumerate(bugs * 4)]
+    records.append(rec("tip", GROUP, ts(24, 15), "Dica: gravem a tela antes de abrir o chamado",
+                       participant=ANA_LID, name="Ana"))
+    model_out = {"destaques": [
+        {"titulo": "Travamentos no app", "contexto": "@P1 e outros relataram que o app travou.", "sacada": SACADA, "puxou": "P1",
+         "tipo": "bug"},
+        {"titulo": "Login", "contexto": "Vários relatos de bug no login.", "sacada": SACADA, "puxou": "P2", "tipo": "conversa"},
+        {"titulo": "Limite de uso", "contexto": "@P1 bateu o limite de uso da ferramenta.", "sacada": SACADA, "puxou": "P1",
+         "tipo": "dica"},
+        {"titulo": "SSH no Windows", "contexto": "@P2 não consegue configurar o SSH.", "sacada": SACADA, "puxou": "P2",
+         "tipo": "suporte"},
+        {"titulo": "Gravar a tela ajuda", "contexto": "@P1 sugeriu gravar a tela para mostrar o passo a passo.",
+         "sacada": SACADA, "puxou": "P1", "tipo": "dica"}]}
+    llm = FakeLLM(model_out)
+    dg = run(runner(FakeEvolution(records=records), llm).build_group(D.scheduled_at(date(2026, 11, 25), "18:00", TZ)))
+    for prompt in (D.GROUP_SYSTEM_PROMPT, D.GROUP_PART_PROMPT, D.GROUP_MERGE_PROMPT):
+        assert "REGRA DE EXCLUSÃO" in prompt and "bug" in prompt and "suporte individual" in prompt
+        assert "problema que afetou" not in prompt
+    assert dg.stats["destaques"] == 1 and "*1. Gravar a tela ajuda*" in dg.text
+    low = dg.text.lower()
+    for word in ("trav", "bug", "erro", "login", "limite", "ssh"):
+        assert word not in low
+    # only bugs/support: nothing is sent
+    evo = FakeEvolution(records=records)
+    only_bad = {"destaques": model_out["destaques"][:4]}
+    assert run(runner(evo, FakeLLM(only_bad)).run_job(D.JOB_GROUP, D.scheduled_at(date(2026, 11, 25), "18:00",
+                                                                                    TZ))) is None
+    assert evo.sent == []
+
+
+def test_owner_digest_still_lists_bugs():
+    assert "'bug'" in D.OWNER_SYSTEM_PROMPT and "REGRA DE EXCLUSÃO" not in D.OWNER_SYSTEM_PROMPT
+    assert D.TYPE_LABEL["bug"] == "Problema relatado"
+
+
+def test_every_group_highlight_has_a_specific_insight_line_and_generic_or_missing_ones_are_dropped():
+    roster = _roster()
+    data = {"destaques": [
+        {"titulo": "Sem sacada", "contexto": "@P1 mostrou um fluxo.", "puxou": "P1"},
+        {"titulo": "Sacada de coach", "contexto": "@P1 mostrou um fluxo.", "puxou": "P1",
+         "sacada": "Isso mostra a importância de automatizar."},
+        {"titulo": "Fluxo pronto corta o retrabalho", "contexto": "@P1 mostrou um fluxo.", "puxou": "P1",
+         "sacada": SACADA}]}
+    dg = D.render_group(data, roster, "24/11", {})
+    assert dg.stats["destaques"] == 1 and "*1. Fluxo pronto corta o retrabalho*" in dg.text
+    assert "Sem sacada" not in dg.text and "coach" not in dg.text
+    blocks = dg.text.split("\n\n")[1:-1]
+    assert blocks and all(len(b.split("\n")) == 3 and b.split("\n")[2].startswith("Sacada: ") for b in blocks)
+    for prompt in (D.GROUP_SYSTEM_PROMPT, D.GROUP_PART_PROMPT, D.GROUP_MERGE_PROMPT):
+        assert "'sacada'" in prompt and "MELHOR SACADA" in prompt and "não invente fato" in prompt
+        assert "NÃO é destaque" in prompt

@@ -23,13 +23,17 @@ and any past day can be previewed with the same code. Evolution must keep messag
 not transcribed twice.
 
 - **Group digest** (`DIGEST_GROUP_ENABLED=1`, `DIGEST_GROUP_JID`, `DIGEST_GROUP_TIME=18:00`): only the **top 3
-  highlights** of the previous day, 00:00 to 24:00 (decisions, announcements, problems that hit several people, useful
-  tips or fixes, conversations with many people), most important first; small talk, greetings and one-message
-  topics are left out, and a weak day gets fewer than 3 instead of filler. Each highlight is a 1-line title plus 1–2
-  lines of context with a real WhatsApp mention (`@<number>` in the text + Evolution's `mentioned` field) of who
-  started it. On a long day each part proposes candidates and one final call picks the top 3 of the whole day. It
-  never says or hints that someone went unanswered: the prompt forbids it, and a draft that does is regenerated
-  once, then the offending sentence is removed. A day without conversation (or without a highlight) sends nothing.
+  highlights** of the previous day, 00:00 to 24:00, picked for the best insight for the group, not for the
+  number of messages: decisions or announcements, news, launches or shared content, tips or lessons that serve
+  everyone, and discussions of ideas, strategy or results. Product bug reports and individual support questions
+  (tool limits, setup, install, environment errors, "how do I") are never highlighted nor mentioned, and a code
+  filter drops any that slip through (the owner digest still lists bugs). Each highlight is a 1-line title that
+  states the point, 1 line on what happened with a real WhatsApp mention (`@<number>` in the text + Evolution's
+  `mentioned` field) of who started it, and a `Sacada:` line with a specific takeaway drawn from the conversation;
+  a highlight without a real takeaway is dropped. A weak day gets fewer than 3, and a day without any highlight
+  sends nothing. On a long day each part proposes candidates and one final call picks the top 3 of the whole day.
+  It never says or hints that someone went unanswered: the prompt forbids it, and a draft that does is
+  regenerated once, then the offending sentence is removed.
 - **Owner digest** (`DIGEST_OWNER_ENABLED=1`, `DIGEST_OWNER_TIME=07:00`): sent privately (`DIGEST_OWNER_TARGET_JID`,
   default the owner's own chat). It reads every chat of the owner's number (`DIGEST_OWNER_INSTANCE`) that had
   activity the day before and lists what is pending for the owner: unanswered messages or audios, questions,
