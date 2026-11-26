@@ -1,7 +1,8 @@
-"""Minimal Evolution API v2 client: list groups, fetch media as base64, send a quoted text, react."""
+"""Minimal Evolution API v2 client: list groups, fetch media as base64, send a quoted text, react, read history."""
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -46,6 +47,31 @@ class EvolutionClient:
             data = data.get("groups") or data.get("data") or []
         return data if isinstance(data, list) else []
 
+    async def fetch_profile_name(self) -> str:
+        """Display name of the instance's own WhatsApp profile ("" when unknown)."""
+        try:
+            resp = await self.http.get(f"{self.s.evolution_base}/instance/fetchInstances", headers=self._headers,
+                                       params={"instanceName": self.s.evolution_instance}, timeout=10)
+            data = resp.json() if resp.status_code < 400 else []
+        except (httpx.HTTPError, ValueError):
+            return ""
+        for item in data if isinstance(data, list) else [data]:
+            inst = item.get("instance") if isinstance(item, dict) and isinstance(item.get("instance"), dict) else item
+            if isinstance(inst, dict) and (inst.get("name") or inst.get("instanceName")) == self.s.evolution_instance:
+                return str(inst.get("profileName") or "").strip()
+        return ""
+
+    async def find_contact_name(self, jid: str) -> str:
+        """Saved/push name of one contact via /chat/findContacts ("" when unknown)."""
+        try:
+            data = await self._request("POST", "chat/findContacts", json={"where": {"remoteJid": jid}})
+        except EvolutionError:
+            return ""
+        for c in data if isinstance(data, list) else []:
+            if isinstance(c, dict) and str(c.get("pushName") or "").strip():
+                return str(c["pushName"]).strip()
+        return ""
+
     async def fetch_owner_jid(self) -> str:
         """ownerJid (the instance's own WhatsApp number) via /instance/fetchInstances."""
         url = f"{self.s.evolution_base}/instance/fetchInstances"
@@ -73,13 +99,56 @@ class EvolutionClient:
                 return owner
         raise EvolutionError(f"no ownerJid for instance {self.s.evolution_instance!r}")
 
-    async def send_text(self, jid: str, text: str) -> dict[str, Any]:
-        """Plain (unquoted) text message."""
-        return await self._request(
-            "POST",
-            "message/sendText",
-            json={"number": jid, "text": text, "linkPreview": False},
-        )
+    async def send_text(self, jid: str, text: str, mentioned: list[str] | None = None) -> dict[str, Any]:
+        """Plain (unquoted) text message. `mentioned` = JIDs to turn the matching `@<number>` in `text`
+        into real WhatsApp mentions (Evolution v2 field `mentioned`)."""
+        body: dict[str, Any] = {"number": jid, "text": text, "linkPreview": False}
+        if mentioned:
+            body["mentioned"] = list(mentioned)
+        return await self._request("POST", "message/sendText", json=body)
+
+    async def send_poll(self, jid: str, name: str, values: list[str], selectable_count: int = 1) -> dict[str, Any]:
+        """Poll via Evolution v2 /message/sendPoll (SendPollDto: name, selectableCount, values)."""
+        return await self._request("POST", "message/sendPoll",
+                                   json={"number": jid, "name": name, "selectableCount": selectable_count,
+                                         "values": list(values)})
+
+    async def find_group_info(self, group_jid: str) -> dict[str, Any]:
+        """Subject + participants of one group via /group/findGroupInfos."""
+        data = await self._request("GET", "group/findGroupInfos", params={"groupJid": group_jid})
+        return data if isinstance(data, dict) else {}
+
+    async def find_messages(
+        self, remote_jid: str | None, start_ts: float, end_ts: float, *, page_size: int = 250, max_pages: int = 80
+    ) -> list[dict[str, Any]]:
+        """Stored messages between two epoch timestamps (inclusive), via /chat/findMessages; one chat, or every
+        chat of the instance when `remote_jid` is None.
+
+        Needs Evolution to keep message history (DATABASE_SAVE_DATA_NEW_MESSAGE). Records come newest first
+        and are paged; the time filter is re-applied here because servers differ in how they apply it.
+        """
+        def iso(ts: float) -> str:
+            return datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
+
+        where: dict[str, Any] = {"messageTimestamp": {"gte": iso(start_ts), "lte": iso(end_ts)}}
+        if remote_jid:
+            where["key"] = {"remoteJid": remote_jid}
+        records: list[dict[str, Any]] = []
+        for page in range(1, max_pages + 1):
+            data = await self._request(
+                "POST", "chat/findMessages", json={"where": where, "page": page, "offset": page_size}
+            )
+            box = (data or {}).get("messages") if isinstance(data, dict) else None
+            batch = (box or {}).get("records") if isinstance(box, dict) else None
+            if not isinstance(batch, list) or not batch:
+                break
+            records.extend(r for r in batch if isinstance(r, dict))
+            pages = box.get("pages") if isinstance(box, dict) else None
+            if not isinstance(pages, int) or page >= pages:
+                break
+        else:
+            log.warning("find_messages stopped at %s pages; older messages of the window were skipped", max_pages)
+        return records
 
     async def get_media_base64(self, key: dict[str, Any]) -> tuple[str, str]:
         """Return (base64, mimetype) for a media message via /chat/getBase64FromMediaMessage."""

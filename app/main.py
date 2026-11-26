@@ -18,8 +18,9 @@ from fastapi import FastAPI, HTTPException, Request
 
 from .config import Settings, load_settings
 from .dedupe import SeenStore
+from .digest import DigestRunner, DigestScheduler, DigestStore, owner_evolution_client, poll_vote_from_message
 from .evolution import EvolutionClient
-from .parse import ROUTE_DM, ROUTE_GROUP, ROUTE_SELF, ROUTE_TRANSCRIPTS, AudioMessage, evaluate_payload, find_group_jid, format_phone, iter_messages, normalize_jid
+from .parse import GROUP_FOOTER, ROUTE_DM, ROUTE_GROUP, ROUTE_SELF, ROUTE_TRANSCRIPTS, AudioMessage, evaluate_payload, find_group_jid, format_phone, is_upsert_event, iter_messages, normalize_jid
 from .summarize import Summarizer, build_summarizer
 from .transcribe import Transcriber, build_transcriber
 
@@ -30,8 +31,7 @@ GROUP_RETRY_SECONDS = 60
 BRT = timezone(timedelta(hours=-3), "BRT")
 
 
-# Footer for group replies only (DM transcripts sent to the Áudios group carry none).
-GROUP_FOOTER = "_transcrito por github.com/ustoppble/laschuk-resume_"
+# GROUP_FOOTER (from parse) ends group replies only (DM transcripts sent to the Áudios group carry none).
 
 # Status reactions on the original group audio (GROUP_REACTIONS); DMs never get one.
 REACTION_WORKING = "⏳"
@@ -64,8 +64,10 @@ class Bot:
         transcriber: Transcriber,
         summarizer: Summarizer,
         seen: SeenStore,
+        digest_store: DigestStore | None = None,
     ):
         self.s = settings
+        self.digest_store = digest_store  # set only when a daily digest is on: caches the transcripts it needs
         self.evolution = evolution
         self.transcriber = transcriber
         self.summarizer = summarizer
@@ -118,6 +120,7 @@ class Bot:
             log.debug("ignoring webhook for instance %r", instance)
             return {"accepted": 0, "ignored": 1}
 
+        self._record_poll_votes(payload)
         group_jid = await self.ensure_group()
         # DMs are only accepted when we know where to send them (the owner's own chat or the target).
         # The owner lookup only runs when a non-group message is present, so group traffic never waits on it;
@@ -205,6 +208,7 @@ class Bot:
         if not transcript.strip():
             log.warning("empty transcript for %s; no reply sent", audio.message_id)
             return None
+        self._cache_for_digest(audio, transcript)
 
         if audio.route in (ROUTE_DM, ROUTE_SELF):
             return await self._deliver_dm(audio, transcript)
@@ -214,6 +218,33 @@ class Bot:
             log.error("unknown route %r for %s; nothing sent", audio.route, audio.message_id)
             return None
         return await self._reply_group(audio, transcript)
+
+    def _record_poll_votes(self, payload: dict[str, Any]) -> None:
+        """Votes on the group digest's feedback poll (Evolution v2 delivers them already decrypted)."""
+        if self.digest_store is None or not is_upsert_event(payload):
+            return
+        for m in iter_messages(payload):
+            vote = poll_vote_from_message(m)
+            if vote is None:
+                continue
+            try:
+                if self.digest_store.record_vote(*vote):
+                    log.info("feedback poll vote recorded (%s)", "/".join(vote[2]) or "retirado")
+            except Exception as exc:
+                log.warning("feedback poll vote not recorded: %s", exc.__class__.__name__)
+
+    def _cache_for_digest(self, audio: AudioMessage, transcript: str) -> None:
+        """Keep the transcript for the daily digest that will read this chat, so it is not transcribed twice."""
+        if self.digest_store is None:
+            return
+        same_instance = not self.s.digest_owner_instance or self.s.digest_owner_instance == self.s.evolution_instance
+        wanted = (self.s.digest_group_enabled and audio.remote_jid == self.s.digest_group_jid) or (
+            self.s.digest_owner_enabled and same_instance and audio.route in (ROUTE_GROUP, ROUTE_DM))
+        if wanted:
+            try:
+                self.digest_store.put_transcript(audio.message_id, transcript.strip())
+            except Exception as exc:
+                log.warning("digest cache write failed for %s: %s", audio.message_id, exc)
 
     async def _full_transcript_text(self, audio: AudioMessage, transcript: str, name: str) -> str:
         """Header + full transcript + short summary (a failed summary never blocks the transcript)."""
@@ -280,18 +311,34 @@ def create_app(settings: Settings | None = None, bot: Bot | None = None) -> Fast
     async def lifespan(app: FastAPI):
         http_client = None
         seen = None
+        digest_store = None
+        scheduler = None
         if bot is None:
             settings.validate()
             setup_logging(settings)
             http_client = httpx.AsyncClient(timeout=settings.http_timeout_seconds)
             seen = SeenStore(settings.dedupe_db)
+            evolution = EvolutionClient(settings, http_client)
+            transcriber = build_transcriber(settings, http_client)
+            if settings.digest_group_enabled or settings.digest_owner_enabled:
+                digest_store = DigestStore(settings.digest_db, settings.digest_retention_hours)
             app.state.bot = Bot(
                 settings,
-                EvolutionClient(settings, http_client),
-                build_transcriber(settings, http_client),
+                evolution,
+                transcriber,
                 build_summarizer(settings, http_client),
                 seen,
+                digest_store,
             )
+            if digest_store is not None:
+                runner = DigestRunner(settings, evolution, transcriber, http_client, digest_store,
+                                      owner_evolution=owner_evolution_client(settings, http_client, evolution))
+                scheduler = DigestScheduler(runner, digest_store)
+                scheduler.start()
+                log.info("daily digest: group=%s at %s, owner=%s at %s (%s)",
+                         "on" if settings.digest_group_enabled else "off", settings.digest_group_time,
+                         "on" if settings.digest_owner_enabled else "off", settings.digest_owner_time,
+                         settings.digest_timezone)
             log.info("LaschukResume starting (instance=%s, group=%s, transcriber=%s, summarizer=%s)",
                      settings.evolution_instance, settings.group_jid or repr(settings.group_name),
                      app.state.bot.transcriber.name, app.state.bot.summarizer.name)
@@ -307,11 +354,15 @@ def create_app(settings: Settings | None = None, bot: Bot | None = None) -> Fast
         try:
             yield
         finally:
+            if scheduler is not None:
+                await scheduler.stop()
             await app.state.bot.drain()
             if http_client is not None:
                 await http_client.aclose()
             if seen is not None:
                 seen.close()
+            if digest_store is not None:
+                digest_store.close()
             log.info("LaschukResume stopped")
 
     app = FastAPI(title="LaschukResume", lifespan=lifespan)

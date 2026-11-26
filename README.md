@@ -13,6 +13,71 @@ When someone in a configured group sends an audio or voice note, LaschukResume:
 
 While it works, the original group audio carries a status **reaction**: ⏳ as soon as the audio is accepted (before download), ✅ once the summary is posted, and ❌ if anything fails (download, transcription, empty transcript or summary, or sending the reply), so an audio never stays on ⏳. A failed reaction is only logged and never blocks the summary. Set `GROUP_REACTIONS=0` to turn it off. The same applies to audios in the Áudios (transcripts) group. DMs and your own chat never get a reaction: there the reaction would be visible to the sender.
 
+## Daily digests (optional, off by default)
+
+Two scheduled digests, each with its own switch. Both read the message history Evolution already stores
+(`/chat/findMessages`) at run time, so text messages are never copied to a new store, a restart loses nothing,
+and any past day can be previewed with the same code. Evolution must keep message history
+(`DATABASE_SAVE_DATA_NEW_MESSAGE=true`). Audios enter through their transcripts, cached in a small SQLite
+(`DIGEST_DB`, deleted after `DIGEST_RETENTION_HOURS`); the webhook pipeline fills that cache too, so an audio is
+not transcribed twice.
+
+- **Group digest** (`DIGEST_GROUP_ENABLED=1`, `DIGEST_GROUP_JID`, `DIGEST_GROUP_TIME=08:00`): only the **top 3
+  highlights** of the previous day, 00:00 to 24:00, picked for the best insight for the group, not for the
+  number of messages: decisions or announcements, news, launches or shared content, tips or lessons that serve
+  everyone, and discussions of ideas, strategy or results. Product bug reports and individual support questions
+  (tool limits, setup, install, environment errors, "how do I") are never highlighted nor mentioned, and a code
+  filter drops any that slip through (the owner digest still lists bugs). Each highlight is a 1-line title that
+  states the point, 1 line on what happened with a real WhatsApp mention (`@<number>` in the text + Evolution's
+  `mentioned` field) of who started it, and a `Sacada:` line with a specific takeaway drawn from the conversation;
+  a highlight without a real takeaway is dropped. A weak day gets fewer than 3, and a day without any highlight
+  sends nothing. On a long day each part proposes candidates and one final call picks the top 3 of the whole day.
+  It never says or hints that someone went unanswered: the prompt forbids it, and a draft that does is
+  regenerated once, then the offending sentence is removed.
+  Right after it (`DIGEST_GROUP_FEEDBACK_POLL=1`, the default) the bot posts a poll "Esse resumo foi útil?" with
+  SIM / NÃO and 1 vote per person (`/message/sendPoll`); no highlight, no digest and no poll. With the poll on, the
+  highlights end with a line in which the bot introduces itself as the owner's intern and asks for the vote
+  (`DIGEST_GROUP_FEEDBACK_TEXT`, `{owner}` = first name of the owner's WhatsApp profile, or "daqui" without one). Votes come in through
+  the same `messages.upsert` webhook: Evolution v2 decrypts them itself (it needs the poll it sent, stored in its
+  database) and sends the chosen option names; the last vote per person counts and an empty vote removes it. The
+  next owner digest gets one line under its header: `Resumo do grupo de ontem: X SIM, Y NÃO`.
+- **Owner digest** (`DIGEST_OWNER_ENABLED=1`, `DIGEST_OWNER_TIME=07:00`): sent privately (`DIGEST_OWNER_TARGET_JID`,
+  default the owner's own chat). It reads every chat of the owner's number (`DIGEST_OWNER_INSTANCE`) that had
+  activity the day before and lists what is pending for the owner: unanswered messages or audios, questions,
+  requests, deadlines and the owner's own promises ("I'll send it tomorrow"). Grouped by conversation, most
+  urgent first; each item says who, what and since when. 1x1 chats are read in full. In groups only what
+  involves the owner is read (an @mention, a reply to or quote of the owner's message, the owner's first name, or
+  the owner speaking) plus a few messages around it; groups where none of that happened are dropped **before any
+  model call**, so hundreds of quiet groups cost nothing. Narrow it with `DIGEST_OWNER_SCOPE`,
+  `DIGEST_OWNER_INCLUDE_JIDS` and `DIGEST_OWNER_EXCLUDE_JIDS`.
+
+The scheduler runs inside the app (one worker) and records each run in SQLite, so a restart or a deploy near the
+scheduled time never posts twice and still sends late, up to `DIGEST_CATCHUP_MINUTES`. Days are split into model
+calls of `DIGEST_BATCH_CHARS` characters (long group days are summarized in parts and merged), which keeps each
+call inside low rate-limit tiers. `DIGEST_MODEL` picks a model for the 2 digests only (empty = the
+summarizer's model); on a free tier with a per-day token quota per model, a smaller model such as
+`openai/gpt-oss-20b` keeps the digests from eating the quota of the per-audio summaries, which always keep
+`OPENAI_SUMMARY_MODEL`. `DIGEST_PROVIDER=codex_cli` writes the 2 digests with the Codex CLI already logged in with a ChatGPT account
+(OAuth, `codex login --device-auth` once) instead of an API key, with `DIGEST_CLI_MODEL`. It runs as a plain text
+model: read-only sandbox, a throwaway empty directory, no user config or rules, no web search, the prompt on stdin,
+and a timeout (`DIGEST_CLI_TIMEOUT_SECONDS`); the CLI must be installed and logged in where the app runs. The Docker image already ships it (pinned) and
+`docker-compose.yml` mounts `./codex-home` (git-ignored, mode 700, owned by uid 1000) as the login volume, so the login
+survives rebuilds and deploys: `mkdir -m 700 codex-home && chown 1000:1000 codex-home`, then once
+`docker exec -it laschuk-resume codex login --device-auth`. If the CLI fails (not logged in, expired login, timeout) the
+digest is skipped with 1 error line in the log, or, with `DIGEST_FALLBACK=api`, written through the API path
+(`DIGEST_MODEL`, e.g. `openai/gpt-oss-120b` on Groq) for the rest of that run. A digest never raises into the audio
+pipeline: each run is isolated and failures are only logged. Preview a
+past day without sending anything:
+
+```bash
+python -m app.digest group --date 2026-11-24   # as it would be posted at DIGEST_GROUP_TIME that day
+python -m app.digest owner --date 2026-11-24   # as it would be sent at DIGEST_OWNER_TIME the next morning
+```
+
+Same prompt-injection boundary as the audio summary: message text, names and transcripts go as JSON data in the
+user message, never in the system prompt, and the model only sees short handles (`P1`, `C1`, message numbers),
+never phone numbers or JIDs.
+
 ## License notice (not OSI open source)
 
 LaschukResume is **source-available**, not OSI open source. See [`LICENSE`](./LICENSE).

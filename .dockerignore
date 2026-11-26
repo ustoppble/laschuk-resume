@@ -6,3 +6,4 @@ data
 run
 __pycache__
 .pytest_cache
+codex-home
